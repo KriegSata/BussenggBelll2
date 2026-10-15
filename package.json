@@ -1,0 +1,16 @@
+{
+  "name": "tong-seafood-buffet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fast station-based operations PWA for Tong Seafood Buffet.",
+  "type": "commonjs",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}

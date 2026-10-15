@@ -1,0 +1,288 @@
+metadata:
+  generated: "2026-10-16"
+  source_tasks: "session SQL todos and approved plan.md"
+  last_updated: "2026-10-16"
+
+summary:
+  total_tasks: 10
+  completed_tasks: 10
+  in_progress_tasks: 0
+  pending_tasks: 0
+  completion_percentage: 100.0
+
+tasks:
+  - task_id: "T001"
+    description: "Define and scaffold the fast installable PWA and lightweight API."
+    status: "completed"
+    implementation:
+      files_changed:
+        - file: "package.json"
+          changes:
+            - change_type: "added"
+              description: "Added build, start, dev, and test scripts."
+        - file: "public/index.html"
+          changes:
+            - change_type: "added"
+              description: "Added station-oriented PWA shell."
+        - file: "public/styles.css"
+          changes:
+            - change_type: "added"
+              description: "Added responsive touch-friendly styling."
+        - file: "public/manifest.webmanifest"
+          changes:
+            - change_type: "added"
+              description: "Added installable web app metadata."
+    verification:
+      build_passed: true
+      test_results:
+        command: "npm run build"
+        passed: 1
+        failed: 0
+        skipped: 0
+        failures: []
+    upstream_trace:
+      plan_item: "1; 8"
+      requirements: ["REQ-024", "REQ-025"]
+
+  - task_id: "T002"
+    description: "Model operational data, immutable ledger, audit history, and settings."
+    status: "completed"
+    implementation:
+      files_changed:
+        - file: "src/db.js"
+          changes:
+            - change_type: "added"
+              description: "Added SQLite schema, seed users, stations, items, policies, ledger, audit, and custody tables."
+    verification:
+      build_passed: true
+      test_results:
+        command: "npm test"
+        passed: 5
+        failed: 0
+        skipped: 0
+        failures: []
+    upstream_trace:
+      plan_item: "2"
+      requirements: ["REQ-017", "REQ-024", "REQ-025"]
+
+  - task_id: "T003"
+    description: "Implement role-aware station access and maker-checker enforcement."
+    status: "completed"
+    implementation:
+      files_changed:
+        - file: "src/server.js"
+          changes:
+            - change_type: "added"
+              description: "Added role guards and maker-checker validation to API actions."
+    verification:
+      build_passed: true
+      test_results:
+        command: "npm test"
+        passed: 5
+        failed: 0
+        skipped: 0
+        failures: []
+    upstream_trace:
+      plan_item: "2"
+      requirements: ["REQ-021", "REQ-025"]
+
+  - task_id: "T004"
+    description: "Implement requisitions, reservations, shortage alerts, and inventory views."
+    status: "completed"
+    implementation:
+      files_changed:
+        - file: "src/server.js"
+          changes:
+            - change_type: "added"
+              description: "Added request creation, approval, reservation, and stock APIs."
+        - file: "public/app.js"
+          changes:
+            - change_type: "added"
+              description: "Added request workflow UI."
+    verification:
+      build_passed: true
+      test_results:
+        command: "npm test"
+        passed: 5
+        failed: 0
+        skipped: 0
+        failures: []
+    upstream_trace:
+      plan_item: "3"
+      requirements: ["REQ-004", "REQ-017", "REQ-019"]
+
+  - task_id: "T005"
+    description: "Implement purchasing, supplier, purchase approval, and payment workflow."
+    status: "completed"
+    implementation:
+      files_changed:
+        - file: "src/server.js"
+          changes:
+            - change_type: "added"
+              description: "Added purchase requests, supplier selection, approval, payments, and release routes."
+        - file: "src/db.js"
+          changes:
+            - change_type: "modified"
+              description: "Added payment persistence."
+    verification:
+      build_passed: true
+      test_results:
+        command: "npm test"
+        passed: 5
+        failed: 0
+        skipped: 0
+        failures: []
+    upstream_trace:
+      plan_item: "4; 5"
+      requirements: ["REQ-001", "REQ-002", "REQ-003", "REQ-006", "REQ-013", "REQ-021"]
+
+  - task_id: "T006"
+    description: "Implement delivery receiving and accepted-only inventory updates."
+    status: "completed"
+    implementation:
+      files_changed:
+        - file: "src/server.js"
+          changes:
+            - change_type: "added"
+              description: "Added delivery recording, accepted/rejected quantities, inventory ledger, and alerts."
+        - file: "public/index.html"
+          changes:
+            - change_type: "added"
+              description: "Added receiving station form."
+    verification:
+      build_passed: true
+      test_results:
+        command: "npm test"
+        passed: 5
+        failed: 0
+        skipped: 0
+        failures: []
+    upstream_trace:
+      plan_item: "5"
+      requirements: ["REQ-005", "REQ-008", "REQ-014", "REQ-019"]
+
+  - task_id: "T007"
+    description: "Automate immutable digital custody acknowledgements."
+    status: "completed"
+    implementation:
+      files_changed:
+        - file: "src/server.js"
+          changes:
+            - change_type: "added"
+              description: "Added one-tap receipt generation, corrections, source references, actor metadata, and custody filtering."
+        - file: "public/app.js"
+          changes:
+            - change_type: "added"
+              description: "Added printable who-handled-it history."
+    verification:
+      build_passed: true
+      test_results:
+        command: "npm test"
+        passed: 5
+        failed: 0
+        skipped: 0
+        failures: []
+    upstream_trace:
+      plan_item: "2; 5; 6; 7"
+      requirements: ["REQ-019", "REQ-20", "REQ-22", "REQ-23"]
+
+  - task_id: "T008"
+    description: "Implement kitchen production, freezer, buffet, leftover, and service logs."
+    status: "completed"
+    implementation:
+      files_changed:
+        - file: "src/server.js"
+          changes:
+            - change_type: "added"
+              description: "Added batch yield and service event routes with custody receipts."
+        - file: "public/index.html"
+          changes:
+            - change_type: "added"
+              description: "Added cooking and service forms."
+    verification:
+      build_passed: true
+      test_results:
+        command: "npm test"
+        passed: 5
+        failed: 0
+        skipped: 0
+        failures: []
+    upstream_trace:
+      plan_item: "6"
+      requirements: ["REQ-010", "REQ-018", "REQ-022", "REQ-023"]
+
+  - task_id: "T009"
+    description: "Implement monitoring, alerts, dashboards, and optional Telegram forwarding."
+    status: "completed"
+    implementation:
+      files_changed:
+        - file: "src/server.js"
+          changes:
+            - change_type: "added"
+              description: "Added dashboard totals, alert deduplication/routing, acknowledgement, and optional Telegram delivery."
+        - file: "README.md"
+          changes:
+            - change_type: "modified"
+              description: "Documented Telegram environment variables and routes."
+    verification:
+      build_passed: true
+      test_results:
+        command: "npm test"
+        passed: 5
+        failed: 0
+        skipped: 0
+        failures: []
+    upstream_trace:
+      plan_item: "7"
+      requirements: ["REQ-009", "REQ-015", "REQ-16"]
+
+  - task_id: "T010"
+    description: "Verify build, tests, endpoint probes, and release documentation."
+    status: "completed"
+    implementation:
+      files_changed:
+        - file: "tests/server.test.js"
+          changes:
+            - change_type: "added"
+              description: "Added API, receiving, custody, maker-checker, purchasing, and payment tests."
+        - file: "scripts/build.js"
+          changes:
+            - change_type: "added"
+              description: "Added deterministic PWA asset build."
+        - file: "checkpoints/tasks-to-impl.yaml"
+          changes:
+            - change_type: "added"
+              description: "Added task-to-implementation traceability checkpoint."
+    verification:
+      build_passed: true
+      test_results:
+        command: "npm test; npm run build; runtime probes"
+        passed: 5
+        failed: 0
+        skipped: 0
+        failures: []
+    upstream_trace:
+      plan_item: "8"
+      requirements: ["REQ-001", "REQ-004", "REQ-006", "REQ-13", "REQ-14", "REQ-17", "REQ-19"]
+
+pending_tasks: []
+untracked_changes: []
+traceability_chain:
+  - chain_id: "TRACE-CUSTODY"
+    requirement: "REQ-019"
+    plan_phase: "Phase-2; Phase-5; Phase-6"
+    plan_item: "Immutable digital acknowledgement receipts"
+    tasks: ["T002", "T006", "T007", "T008", "T010"]
+    files:
+      - "src/db.js"
+      - "src/server.js"
+      - "public/app.js"
+      - "tests/server.test.js"
+    status: "complete"
+validation:
+  passed: true
+  errors: []
+  warnings:
+    - "Demo authentication uses x-user-id and must be replaced by an identity provider before production."
+    - "Telegram delivery activates only when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are configured."
+  blocking_issues: []

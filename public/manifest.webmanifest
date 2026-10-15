@@ -1,0 +1,9 @@
+{
+  "name": "Tong Buffet Operations",
+  "short_name": "Tong Buffet",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f8f7",
+  "theme_color": "#0f766e",
+  "icons": []
+}
