@@ -1,167 +1,358 @@
-const state = { user: null, bootstrap: null, dashboard: null };
-const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => [...document.querySelectorAll(selector)];
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const state = { user: null, bootstrap: null, task: null, undo: null, busy: false, correction: null };
+const titles = { request: 'Request stock', delivery: 'Receive delivery', batch: 'Log cooking', service: 'Log service', activity: 'Recent activity', overview: 'Overview' };
+const tasks = { KITCHEN: ['request', 'batch', 'service'], WAITER: ['service'], ACCOUNTANT: ['delivery', 'request'], MANAGER: ['request', 'delivery', 'batch', 'service'], OWNER: ['request', 'delivery', 'batch', 'service'] };
+const forms = { request: 'request-form', delivery: 'delivery-form', batch: 'batch-form', service: 'service-form' };
+const store = {
+  memory: new Map(),
+  get(key, fallback = null) { try { return JSON.parse(localStorage.getItem(`tong:${key}`)) ?? this.memory.get(key) ?? fallback; } catch { return this.memory.get(key) ?? fallback; } },
+  set(key, value) { this.memory.set(key, value); try { localStorage.setItem(`tong:${key}`, JSON.stringify(value)); } catch { /* Keep drafts and retry keys in memory when device storage is unavailable. */ } }
+};
+const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+const kg = (value) => `${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} kg`;
+const key = (kind, task) => `${kind}:${state.user.id}:${task}`;
+const id = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+let deviceId = store.get('device');
+if (!deviceId) { deviceId = id(); store.set('device', deviceId); }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { "content-type": "application/json", "x-user-id": state.user?.id || "owner-1", ...(options.headers || {}) }
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
+  let response;
+  try {
+    response = await fetch(path, { signal: AbortSignal.timeout(12000), ...options, headers: { 'content-type': 'application/json', 'x-user-id': state.user?.id || 'kitchen-1', ...options.headers } });
+  } catch { throw Object.assign(new Error('Connection interrupted. Your entry is kept. Retry to check and save it safely.'), { uncertain: true }); }
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !body) throw Object.assign(new Error(body?.error || 'Could not confirm the save. Retry safely.'), { status: response.status, uncertain: response.status >= 500 || !body });
   return body;
 }
-
-function showNotice(message, error = false) {
-  const notice = $("#notice");
-  notice.textContent = message;
-  notice.className = `notice${error ? " error" : ""}`;
-  window.setTimeout(() => notice.classList.add("hidden"), 5000);
+function feedback(message, error = false, undo = null) {
+  $('#feedback').hidden = false;
+  $('#feedback').classList.toggle('error', error);
+  $('#feedback-message').textContent = message;
+  state.undo = undo;
+  $('#undo-button').hidden = !undo;
+  if (undo) store.set(`last-undo:${state.user.id}`, undo);
 }
-
-function kg(value) {
-  return `${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} kg`;
+function formError(form, message) {
+  const error = $('.form-error', form);
+  error.textContent = message;
+  error.classList.toggle('hidden', !message);
 }
-
-function setView(view) {
-  $$(".tab").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
-  $$(".view").forEach((section) => section.classList.toggle("active", section.id === `${view}-view`));
-  if (view === "custody") loadCustody();
-  if (view === "requests") loadRequests();
+function fieldValues(form) {
+  return $$('input, select, textarea', form).filter((field) => field.id).reduce((values, field) => ({ ...values, [field.id]: field.value }), { eventKind: $('input[name="event-kind"]:checked', form)?.value });
 }
-
-function itemOptions() {
-  return state.bootstrap.items.map((item) => `<option value="${item.id}">${item.name} (${kg(item.onHand - item.reserved)} available)</option>`).join("");
+function saveDraft(form, task) { store.set(key('draft', task), fieldValues(form)); }
+function restoreForm(task) {
+  const form = document.getElementById(forms[task]);
+  if (!form) return;
+  form.reset();
+  const draft = store.get(key('draft', task), {});
+  for (const [fieldId, value] of Object.entries(draft)) {
+    const field = document.getElementById(fieldId);
+    if (field && form.contains(field)) field.value = value;
+  }
+  const radio = $$('input[name="event-kind"]', form).find((field) => field.value === draft.eventKind);
+  if (radio) radio.checked = true;
+  $$('details', form).forEach((details) => { details.open = $$('input', details).some((field) => field.value); });
+  formError(form, '');
+  lockForm(task, false);
+  updateSummary(task);
 }
-
-function renderMetrics() {
-  const data = state.dashboard;
-  $("#metrics").innerHTML = [
-    ["Available stock", kg(data.onHand - data.reserved), "usable kg"],
-    ["Reserved", kg(data.reserved), "held for requests"],
-    ["Freezer", kg(data.freezer), "prepared kg"],
-    ["Cooked today", kg(data.cooked), "production output"],
-    ["Open alerts", data.openAlerts, "needs attention"]
-  ].map(([label, value, detail]) => `<div class="metric"><strong>${value}</strong><span>${label} · ${detail}</span></div>`).join("");
+function lockForm(task, sending) {
+  const form = document.getElementById(forms[task]);
+  const pending = store.get(key('pending', task));
+  $$('input, select, textarea, button', form).forEach((control) => { control.disabled = sending || Boolean(pending); });
+  const submit = $('button[type="submit"]', form);
+  submit.disabled = sending;
+  submit.textContent = sending ? 'Saving…' : pending ? 'Retry save safely' : submit.dataset.label;
+  form.setAttribute('aria-busy', String(sending));
+  if (pending && !sending) formError(form, 'This entry is awaiting confirmation. Retry save safely before editing it.');
 }
-
-async function loadDashboard() {
-  state.dashboard = await api("/api/dashboard");
-  renderMetrics();
-  $("#recent-custody").innerHTML = state.dashboard.recentCustody.length
-    ? state.dashboard.recentCustody.map(receiptLine).join("")
-    : `<div class="empty small">No handoffs recorded yet.</div>`;
-  await loadAlerts();
+function availableHints() {
+  $$('[data-stock-for]').forEach((hint) => {
+    const item = state.bootstrap.items.find((entry) => entry.id === Number(document.getElementById(hint.dataset.stockFor).value));
+    hint.textContent = item ? `Available raw stock: ${kg(item.onHand - item.reserved)} · Freezer: ${kg(item.freezer)}` : 'Choose a dish';
+  });
 }
-
-async function loadAlerts() {
-  const { alerts } = await api("/api/alerts");
-  $("#alerts").innerHTML = alerts.length ? alerts.map((alert) => `
-    <div class="alert">
-      <strong>${alert.type}</strong>
-      <div>${alert.message}</div>
-      <div class="small">${new Date(alert.created_at).toLocaleString()} · ${alert.status}</div>
-      ${alert.status === "OPEN" ? `<button class="text-button" data-alert-id="${alert.id}">Acknowledge</button>` : ""}
-    </div>
-  `).join("") : `<div class="empty small">Everything is clear.</div>`;
-  $$("[data-alert-id]").forEach((button) => button.addEventListener("click", async () => {
-    try { await api(`/api/alerts/${button.dataset.alertId}/acknowledge`, { method: "POST" }); showNotice("Alert acknowledged."); await loadAlerts(); } catch (error) { showNotice(error.message, true); }
-  }));
+function updateSummary(task) {
+  availableHints();
+  const form = document.getElementById(forms[task]);
+  if (!form) return;
+  if (task === 'service') {
+    const leftover = $('input[name="event-kind"]:checked').value === 'LEFTOVER';
+    $('#leftover-fields').hidden = !leftover;
+    const discard = leftover && $('#service-decision').value === 'DISCARD';
+    $('#reason-field').hidden = !discard;
+    $('#service-reason').required = discard;
+  }
+  let text = '';
+  const item = (selector) => state.bootstrap.items.find((entry) => entry.id === Number($(selector).value))?.name || '';
+  if (task === 'request' && $('#request-kilos').value) text = `${item('#request-item')} · ${kg($('#request-kilos').value)}`;
+  if (task === 'batch' && $('#raw-kilos').value) text = `${item('#batch-item')} · ${kg($('#raw-kilos').value)} raw → ${kg($('#cooked-kilos').value)} cooked`;
+  if (task === 'service' && $('#service-kilos').value) text = `${$('input[name="event-kind"]:checked').nextElementSibling.textContent} · ${item('#service-item')} · ${kg($('#service-kilos').value)}`;
+  if (task === 'delivery') text = $$('.accepted-kilos').filter((field) => Number(field.value) > 0).map((field) => `${field.dataset.name} ${kg(field.value)}`).join(' · ');
+  $('.entry-summary', form).textContent = text ? `${text} · ${$('#current-service').selectedOptions[0].textContent}` : 'Enter quantities to prepare this entry.';
 }
-
-function receiptLine(receipt) {
-  const actor = receipt.actor_name || receipt.actor_role_name || receipt.actor_role;
-  return `<div class="receipt-line"><strong>${receipt.action.replaceAll("_", " ")} · ${receipt.kilos ? kg(receipt.kilos) : "recorded"}</strong><div>${receipt.source_reference} · ${actor}</div><div class="small">${receipt.station} · ${new Date(receipt.created_at).toLocaleString()} · ${receipt.receipt_number}</div></div>`;
+async function setTask(task, focus = true) {
+  if (state.busy) return;
+  state.task = task;
+  store.set(`task:${state.user.id}`, task);
+  $$('[data-task]').forEach((button) => { if (button.dataset.task === task) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); });
+  $$('[data-panel]').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === task));
+  $('#task-title').textContent = titles[task];
+  if (forms[task] && focus) $('select, input:not([type=radio])', document.getElementById(forms[task])).focus();
+  try {
+    if (task === 'activity') await loadActivity();
+    if (task === 'request') await loadRequests();
+    if (task === 'overview') await loadOverview();
+  } catch (error) { feedback(`Could not refresh ${titles[task].toLowerCase()}. ${error.message}`, true); }
 }
-
+function confirmAction(message, label = 'Confirm') {
+  const dialog = $('#confirm-dialog');
+  $('#confirm-message').textContent = message;
+  $('button[value=confirm]', dialog).textContent = label;
+  dialog.returnValue = '';
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'confirm'), { once: true });
+    dialog.showModal();
+  });
+}
+function payload(task) {
+  const service = $('#current-service').value;
+  if (task === 'request') return { path: '/api/requests', body: { service, notes: $('#request-notes').value, items: [{ stockItemId: Number($('#request-item').value), kilos: Number($('#request-kilos').value) }] } };
+  if (task === 'delivery') {
+    const items = $$('.accepted-kilos').filter((field) => Number(field.value) > 0).map((field) => ({ stockItemId: Number(field.dataset.stockId), kilos: Number(field.value), acceptedKilos: Number(field.value), rejectedKilos: 0 }));
+    if (!items.length) throw new Error('Enter accepted kilos for at least one item.');
+    return { path: '/api/deliveries', body: { supplierName: $('#supplier-name').value.trim(), photoPath: $('#delivery-photo').value, items } };
+  }
+  if (task === 'batch') {
+    const rawKilos = Number($('#raw-kilos').value), cookedKilos = Number($('#cooked-kilos').value), freezerKilos = Number($('#freezer-kilos').value);
+    if (freezerKilos > cookedKilos) throw new Error('Freezer kilos cannot exceed cooked kilos.');
+    const stock = state.bootstrap.items.find((item) => item.id === Number($('#batch-item').value));
+    if (rawKilos > stock.onHand - stock.reserved) throw new Error('Raw kilos exceed available stock. Adjust the quantity or refresh availability.');
+    return { path: '/api/batches', body: { stockItemId: stock.id, rawKilos, cookedKilos, freezerKilos, service } };
+  }
+  const kind = $('input[name="event-kind"]:checked').value;
+  const decision = kind === 'LEFTOVER' ? $('#service-decision').value : '';
+  return { path: '/api/service-logs', body: { kind, stockItemId: Number($('#service-item').value), kilos: Number($('#service-kilos').value), service, decision, reason: decision === 'DISCARD' ? $('#service-reason').value.trim() : '' } };
+}
+async function refreshStock() {
+  const { items } = await api('/api/inventory');
+  state.bootstrap.items = items;
+  availableHints();
+}
+async function submitEntry(event, task) {
+  event.preventDefault();
+  if (state.busy) return;
+  const form = event.target;
+  let pending = store.get(key('pending', task));
+  state.busy = true;
+  $('#station-select').disabled = true;
+  $('#current-service').disabled = true;
+  formError(form, '');
+  try {
+    if (!pending) {
+      const entry = payload(task);
+      const summary = $('.entry-summary', form).textContent;
+      const quantities = [entry.body.kilos, entry.body.rawKilos, ...(entry.body.items || []).map((item) => item.kilos)].filter(Number.isFinite);
+      if ((entry.body.decision === 'DISCARD' || quantities.some((quantity) => quantity >= 50)) && !await confirmAction(`${summary}${entry.body.decision === 'DISCARD' ? ' · Discard: ' + entry.body.reason : ''}. Save this entry?`, 'Save entry')) return;
+      pending = { ...entry, key: id(), summary };
+      store.set(key('pending', task), pending);
+    }
+    lockForm(task, true);
+    const result = await api(pending.path, { method: 'POST', headers: { 'idempotency-key': pending.key }, body: JSON.stringify({ ...pending.body, deviceId }) });
+    store.set(key('pending', task), null);
+    let undo = result.receipt ? { path: `/api/custody/${result.receipt.id}/undo`, key: id() } : { path: `/api/requests/${result.request.id}/cancel`, key: id() };
+    const previous = fieldValues(form);
+    form.reset();
+    // Keep context for rapid repeated entries; quantities and notes must be entered again.
+    $$('.item-select', form).forEach((field) => { field.value = previous[field.id]; });
+    if (task === 'service') $$('input[name="event-kind"]', form).find((field) => field.value === previous.eventKind).checked = true;
+    if (task === 'delivery') $('#supplier-name').value = previous['supplier-name'];
+    saveDraft(form, task);
+    updateSummary(task);
+    feedback(`Saved: ${pending.summary}`, false, undo);
+    const focusTarget = $('input[type=number]', form);
+    lockForm(task, false);
+    focusTarget?.focus();
+    if (focusTarget && window.matchMedia('(max-width: 800px)').matches) focusTarget.scrollIntoView({ block: 'center' });
+    try { await refreshStock(); if (task === 'request') await loadRequests(); } catch { feedback(`Saved: ${pending.summary}. Availability could not refresh.`, false, undo); }
+  } catch (error) {
+    if (!error.uncertain) store.set(key('pending', task), null);
+    formError(form, error.message);
+    if (error.status === 409) { try { await refreshStock(); } catch { /* Keep the form available for recovery. */ } }
+  } finally {
+    state.busy = false;
+    $('#station-select').disabled = false;
+    $('#current-service').disabled = false;
+    lockForm(task, false);
+  }
+}
+async function postAction(path, actionKey = id(), body = {}) {
+  return api(path, { method: 'POST', headers: { 'idempotency-key': actionKey }, body: JSON.stringify(body) });
+}
+async function undoEntry(action, button) {
+  if (state.busy) return;
+  state.busy = true;
+  button.disabled = true;
+  $('#station-select').disabled = true;
+  try {
+    await postAction(action.path, action.key, { deviceId });
+    store.set(`last-undo:${state.user.id}`, null);
+    feedback(action.path.includes('/requests/') ? 'Draft request cancelled.' : 'Entry undone. The original receipt remains in history.');
+    try { await refreshStock(); await loadActivity(); await loadRequests(); } catch { feedback('Entry undone. History could not refresh; reopen Recent activity to retry.'); }
+  } catch (error) {
+    if (!error.uncertain) store.set(`last-undo:${state.user.id}`, null);
+    feedback(error.message, true, error.uncertain ? action : null);
+  }
+  finally { button.disabled = false; state.busy = false; $('#station-select').disabled = false; }
+}
 async function loadRequests() {
-  const { requests } = await api("/api/requests");
-  $("#requests").innerHTML = requests.length ? `<table><thead><tr><th>Reference</th><th>Service</th><th>Kilos</th><th>Status</th><th>Requested by</th><th>Actions</th></tr></thead><tbody>${requests.map((request) => `<tr><td><strong>${request.reference}</strong></td><td>${request.service}</td><td>${kg(request.kilos)}</td><td><span class="pill">${request.status.replaceAll("_", " ")}</span></td><td>${request.requested_by_name}</td><td>${request.status === "DRAFT" && ["MANAGER", "OWNER"].includes(state.user.role) ? `<button class="text-button" data-request-action="approve" data-request-id="${request.id}">Approve</button>` : ""}${request.status === "APPROVED" && ["ACCOUNTANT", "MANAGER", "OWNER"].includes(state.user.role) ? `<button class="text-button" data-request-action="reserve" data-request-id="${request.id}">Reserve stock</button>` : ""}</td></tr>`).join("")}</tbody></table>` : `<div class="empty small">No requests yet.</div>`;
-  $$("[data-request-action]").forEach((button) => button.addEventListener("click", async () => {
-    try { await api(`/api/requests/${button.dataset.requestId}/${button.dataset.requestAction}`, { method: "POST" }); showNotice("Request updated."); await loadRequests(); await loadDashboard(); } catch (error) { showNotice(error.message, true); }
+  const { requests } = await api('/api/requests');
+  $('#requests').innerHTML = requests.length ? `<table><thead><tr><th>Request</th><th>Service / kg</th><th>Status</th><th>Action</th></tr></thead><tbody>${requests.map((request) => {
+    const actions = [];
+    if (request.status === 'DRAFT' && ['MANAGER', 'OWNER'].includes(state.user.role)) actions.push(`<button class="secondary" data-request="${request.id}" data-action="approve">Approve</button>`);
+    if (request.status === 'APPROVED' && ['MANAGER', 'OWNER', 'ACCOUNTANT'].includes(state.user.role)) actions.push(`<button class="secondary" data-request="${request.id}" data-action="reserve">Reserve stock</button>`);
+    if (request.status === 'DRAFT' && (request.requested_by === state.user.id || ['MANAGER', 'OWNER', 'ACCOUNTANT'].includes(state.user.role))) actions.push(`<button class="text-button" data-request="${request.id}" data-action="cancel">Cancel request</button>`);
+    return `<tr><td>${escapeHTML(request.reference)}</td><td>${escapeHTML(request.service)} · ${kg(request.kilos)}</td><td>${escapeHTML(request.status.replaceAll('_', ' '))}</td><td>${actions.join(' ')}</td></tr>`;
+  }).join('')}</tbody></table>` : '<p class="muted">No requests yet.</p>';
+  $$('[data-request]').forEach((button) => button.addEventListener('click', async () => {
+    if (state.busy) return;
+    state.busy = true;
+    button.disabled = true;
+    $('#station-select').disabled = true;
+    try {
+      if (button.dataset.action === 'cancel' && !await confirmAction('Cancel this draft request?', 'Cancel request')) return;
+      button.dataset.key ||= id();
+      await postAction(`/api/requests/${button.dataset.request}/${button.dataset.action}`, button.dataset.key);
+      feedback(`Request ${button.dataset.action === 'cancel' ? 'cancelled' : button.dataset.action === 'approve' ? 'approved' : 'stock reserved'}.`);
+      await loadRequests(); await refreshStock();
+    } catch (error) { feedback(error.message, true); }
+    finally { button.disabled = false; state.busy = false; $('#station-select').disabled = false; }
   }));
 }
-
-function buildForms() {
-  $("#request-items").innerHTML = `<div class="item-row"><label>Dish / stock item<select class="request-item">${itemOptions()}</select></label><label>Kilos<input class="request-kilos" type="number" min="0.1" step="0.1" value="1"></label></div>`;
-  $("#delivery-items").innerHTML = state.bootstrap.items.slice(0, 4).map((item) => `<div class="item-row"><label>${item.name}<select class="delivery-item" data-stock-id="${item.id}"><option value="0">Not delivered</option><option value="${item.onHand}">Use expected amount</option></select></label><label>Accepted kg<input class="accepted-kilos" data-stock-id="${item.id}" type="number" min="0" step="0.1" value="0"></label></div>`).join("");
-  $$(".item-select").forEach((select) => { select.innerHTML = itemOptions(); });
+async function loadActivity() {
+  const { receipts } = await api('/api/custody');
+  const reversed = new Set(receipts.filter((receipt) => receipt.reversed).map((receipt) => receipt.id));
+  $('#activity').innerHTML = receipts.length ? receipts.map((receipt) => {
+    const eligible = receipt.reversible && !reversed.has(receipt.id) && (receipt.actor_id === state.user.id || ['OWNER', 'MANAGER'].includes(state.user.role));
+    return `<article class="receipt ${reversed.has(receipt.id) ? 'reversed' : ''}"><h3>${escapeHTML(receipt.action.replaceAll('_', ' '))} · ${kg(receipt.kilos)}${reversed.has(receipt.id) ? ' · Undone' : ''}</h3><p>${escapeHTML(receipt.source_reference)} · ${escapeHTML(receipt.station)}</p><p class="small">${escapeHTML(new Date(receipt.created_at).toLocaleString())} · ${escapeHTML(receipt.receipt_number)}${receipt.correction_of ? ` · Linked to receipt #${receipt.correction_of}` : ''}</p>${receipt.condition ? `<p>${escapeHTML(receipt.condition)}</p>` : ''}<div class="actions">${eligible ? `<button class="secondary" data-undo="${receipt.id}">Undo entry</button>` : ''}${!receipt.correction_of ? `<button class="text-button" data-correct="${receipt.id}">Add correction note</button>` : ''}</div></article>`;
+  }).join('') : '<p class="card muted">No activity yet. Saved handoffs will appear here.</p>';
+  $$('[data-undo]').forEach((button) => button.addEventListener('click', async () => {
+    if (state.busy) return;
+    if (await confirmAction('Undo this entry? Its original receipt will stay in history.', 'Undo entry')) { button.dataset.key ||= id(); await undoEntry({ path: `/api/custody/${button.dataset.undo}/undo`, key: button.dataset.key }, button); }
+  }));
+  $$('[data-correct]').forEach((button) => button.addEventListener('click', () => {
+    state.correction = { receiptId: button.dataset.correct, key: id() };
+    $('#correction-form').reset();
+    $('#correction-note').readOnly = false;
+    $('#cancel-correction').disabled = false;
+    formError($('#correction-form'), '');
+    $('#correction-dialog').showModal();
+  }));
 }
-
-async function submitRequest(event) {
-  event.preventDefault();
-  try {
-    const items = $$(".request-item").map((select, index) => ({ stockItemId: Number(select.value), kilos: Number($$(".request-kilos")[index].value) }));
-    await api("/api/requests", { method: "POST", body: JSON.stringify({ service: $("#request-service").value, notes: $("#request-notes").value, items }) });
-    $("#request-form").classList.add("hidden"); showNotice("Request submitted."); await loadRequests(); await loadDashboard();
-  } catch (error) { showNotice(error.message, true); }
+async function loadOverview() {
+  const data = await api('/api/dashboard');
+  $('#metrics').innerHTML = [['Available stock', kg(data.onHand - data.reserved)], ['Freezer', kg(data.freezer)], ['Cooked today', kg(data.cooked)]].map(([label, value]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`).join('');
+  const { alerts } = await api('/api/alerts');
+  $('#alerts').innerHTML = alerts.filter((alert) => alert.status === 'OPEN').map((alert) => `<article class="alert"><h3>${escapeHTML(alert.type)}</h3><p>${escapeHTML(alert.message)}</p><button class="secondary" data-alert="${alert.id}">Acknowledge</button></article>`).join('') || '<p class="muted">All clear. No open alerts for this station.</p>';
+  $$('[data-alert]').forEach((button) => button.addEventListener('click', async () => {
+    if (state.busy) return;
+    button.disabled = true;
+    try { button.dataset.key ||= id(); await postAction(`/api/alerts/${button.dataset.alert}/acknowledge`, button.dataset.key); await loadOverview(); feedback('Alert acknowledged.'); } catch (error) { feedback(error.message, true); } finally { button.disabled = false; }
+  }));
 }
-
-async function submitDelivery(event) {
-  event.preventDefault();
-  try {
-    const items = $$(".accepted-kilos").map((input) => {
-      const stockItemId = Number(input.dataset.stockId);
-      const acceptedKilos = Number(input.value);
-      return { stockItemId, kilos: acceptedKilos, acceptedKilos, rejectedKilos: 0 };
-    }).filter((item) => item.acceptedKilos > 0);
-    if (!items.length) throw new Error("Enter accepted kilos for at least one item.");
-    await api("/api/deliveries", { method: "POST", body: JSON.stringify({ supplierName: $("#supplier-name").value, photoPath: $("#delivery-photo").value, items }) });
-    event.target.reset(); showNotice("Delivery recorded. Digital acknowledgement receipt created."); await loadDashboard();
-  } catch (error) { showNotice(error.message, true); }
+function useStation(user, initial = false) {
+  state.user = user;
+  store.set('station', user.id);
+  $('#station-select').value = user.id;
+  $('#station-label').textContent = `${user.station} · Open access`;
+  const allowed = [...tasks[user.role], 'activity', 'overview'];
+  $$('[data-task]').forEach((button) => { button.hidden = !allowed.includes(button.dataset.task); });
+  $('[data-task="request"]').textContent = user.role === 'ACCOUNTANT' ? 'Requests' : 'Request stock';
+  $('#request-form').hidden = user.role === 'ACCOUNTANT';
+  $('#requests').parentElement.open = ['ACCOUNTANT', 'MANAGER', 'OWNER'].includes(user.role);
+  Object.keys(forms).forEach(restoreForm);
+  $('#feedback').hidden = true;
+  const lastUndo = store.get(`last-undo:${user.id}`);
+  if (lastUndo) feedback('Your last saved entry can be undone or reviewed in Recent activity.', false, lastUndo);
+  const last = store.get(`task:${user.id}`);
+  setTask(allowed.includes(last) ? last : tasks[user.role][0], !initial);
 }
-
-async function submitBatch(event) {
-  event.preventDefault();
-  try {
-    await api("/api/batches", { method: "POST", body: JSON.stringify({ stockItemId: Number($("#batch-item").value), rawKilos: Number($("#raw-kilos").value), cookedKilos: Number($("#cooked-kilos").value), freezerKilos: Number($("#freezer-kilos").value), service: $("#batch-service").value }) });
-    event.target.reset(); showNotice("Batch logged and raw-stock handoff acknowledged."); await loadDashboard();
-  } catch (error) { showNotice(error.message, true); }
-}
-
-async function submitService(event) {
-  event.preventDefault();
-  try {
-    const decision = $("#service-decision").value;
-    if (decision === "DISCARD" && !$("#service-reason").value.trim()) throw new Error("Add a reason before recording discard.");
-    await api("/api/service-logs", { method: "POST", body: JSON.stringify({ kind: $("#service-kind").value, stockItemId: Number($("#service-item").value), kilos: Number($("#service-kilos").value), decision, reason: $("#service-reason").value }) });
-    event.target.reset(); showNotice("Service event logged and acknowledged."); await loadDashboard();
-  } catch (error) { showNotice(error.message, true); }
-}
-
-async function loadCustody() {
-  const { receipts } = await api("/api/custody");
-  $("#custody-table").innerHTML = receipts.length ? `<table><thead><tr><th>Receipt</th><th>Event</th><th>Reference</th><th>Person / station</th><th>Kilos</th><th>When</th></tr></thead><tbody>${receipts.map((receipt) => `<tr><td><strong>${receipt.receipt_number}</strong></td><td>${receipt.action.replaceAll("_", " ")}<br><span class="small">${receipt.condition || ""}</span></td><td>${receipt.source_reference}</td><td>${receipt.actor_name}<br><span class="small">${receipt.actor_role} · ${receipt.station} · ${receipt.device_id}</span></td><td>${kg(receipt.kilos)}</td><td>${new Date(receipt.created_at).toLocaleString()}</td></tr>`).join("")}</tbody></table>` : `<div class="empty small">No custody receipts yet.</div>`;
-}
-
 async function start() {
-  state.bootstrap = await api("/api/bootstrap");
-  state.user = state.bootstrap.currentUser;
-  $("#user-select").innerHTML = state.bootstrap.users.map((user) => `<option value="${user.id}">${user.name} · ${user.station}</option>`).join("");
-  $("#user-select").value = state.user.id;
-  $("#welcome").textContent = `${state.user.station} · ${state.user.name}`;
-  buildForms();
-  await loadDashboard();
+  $('#retry-start').disabled = true;
+  try {
+    state.bootstrap = await api('/api/bootstrap');
+    $('#station-select').innerHTML = state.bootstrap.users.map((user) => `<option value="${escapeHTML(user.id)}">${escapeHTML(user.station.replace(' PC', ''))}</option>`).join('');
+    const options = '<option value="" disabled selected>Choose a dish</option>' + state.bootstrap.items.map((item) => `<option value="${item.id}">${escapeHTML(item.name)}</option>`).join('');
+    $$('.item-select').forEach((select) => { select.innerHTML = options; });
+    $('#suppliers').innerHTML = state.bootstrap.suppliers.map((supplier) => `<option value="${escapeHTML(supplier.name)}"></option>`).join('');
+    $('#delivery-items').innerHTML = state.bootstrap.items.map((item) => `<div class="delivery-row"><div>${escapeHTML(item.name)}<small>Accepted kilos</small></div><label class="quantity-label"><span class="small">${escapeHTML(item.name)} (kg)</span><input id="delivery-kg-${item.id}" class="accepted-kilos" data-stock-id="${item.id}" data-name="${escapeHTML(item.name)}" type="number" min="0" step="0.1" inputmode="decimal" placeholder="—"></label></div>`).join('');
+    $('#current-service').value = store.get('service', new Date().getHours() >= 15 ? 'DINNER' : 'LUNCH');
+    $('#workspace-content').hidden = false;
+    $('#startup-error').classList.add('hidden');
+    useStation(state.bootstrap.users.find((user) => user.id === store.get('station')) || state.bootstrap.users.find((user) => user.role === 'KITCHEN'), true);
+    await checkConnection();
+  } catch { $('#startup-error').classList.remove('hidden'); }
+  finally { $('#retry-start').disabled = false; }
 }
-
-$$(".tab").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
-$$("[data-view-target]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.viewTarget)));
-$("#new-request-button").addEventListener("click", () => $("#request-form").classList.remove("hidden"));
-$("#cancel-request").addEventListener("click", () => $("#request-form").classList.add("hidden"));
-$("#refresh-alerts").addEventListener("click", loadAlerts);
-$("#request-form-element").addEventListener("submit", submitRequest);
-$("#delivery-form").addEventListener("submit", submitDelivery);
-$("#batch-form").addEventListener("submit", submitBatch);
-$("#service-form").addEventListener("submit", submitService);
-$("#print-custody").addEventListener("click", () => window.print());
-$("#user-select").addEventListener("change", async (event) => {
-  state.user = state.bootstrap.users.find((user) => user.id === event.target.value);
-  $("#welcome").textContent = `${state.user.station} · ${state.user.name}`;
-  buildForms();
-  await loadDashboard();
+async function checkConnection() {
+  let connected = false;
+  try { const response = await fetch('/api/health', { cache: 'no-store', signal: AbortSignal.timeout(5000) }); connected = response.ok; } catch { /* Report server reachability, not just browser connectivity. */ }
+  $('#connection').textContent = connected ? '● Connected' : '○ Offline · drafts kept';
+  $('#connection').classList.toggle('offline', !connected);
+}
+for (const [task, formId] of Object.entries(forms)) {
+  const form = document.getElementById(formId);
+  $('button[type=submit]', form).dataset.label = $('button[type=submit]', form).textContent;
+  form.addEventListener('submit', (event) => submitEntry(event, task));
+  ['input', 'change'].forEach((eventName) => form.addEventListener(eventName, () => { if (!state.user) return; saveDraft(form, task); updateSummary(task); }));
+  $('.clear-draft', form).addEventListener('click', async () => {
+    if (!await confirmAction('Clear this unsaved entry?', 'Clear entry')) return;
+    store.set(key('draft', task), null); restoreForm(task); $('select, input', form)?.focus();
+  });
+}
+$$('[data-task]').forEach((button) => button.addEventListener('click', () => setTask(button.dataset.task)));
+$('#station-select').addEventListener('change', (event) => useStation(state.bootstrap.users.find((user) => user.id === event.target.value)));
+$('#current-service').addEventListener('change', () => { store.set('service', $('#current-service').value); Object.keys(forms).forEach(updateSummary); });
+$('#undo-button').addEventListener('click', () => state.undo && undoEntry(state.undo, $('#undo-button')));
+$('#print-custody').addEventListener('click', () => window.print());
+$('#refresh-alerts').addEventListener('click', () => loadOverview().catch((error) => feedback(error.message, true)));
+$('#refresh-stock').addEventListener('click', async () => {
+  const button = $('#refresh-stock');
+  button.disabled = true;
+  try { await refreshStock(); feedback('Stock availability updated.'); }
+  catch (error) { feedback(error.message, true); }
+  finally { button.disabled = false; }
 });
-let deferredInstall;
-window.addEventListener("beforeinstallprompt", (event) => { event.preventDefault(); deferredInstall = event; $("#install-button").classList.remove("hidden"); });
-$("#install-button").addEventListener("click", async () => { if (!deferredInstall) return; deferredInstall.prompt(); deferredInstall = null; $("#install-button").classList.add("hidden"); });
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
-start().catch((error) => showNotice(error.message, true));
+$('#retry-start').addEventListener('click', start);
+$('#cancel-correction').addEventListener('click', () => { if (!state.busy) $('#correction-dialog').close(); });
+$('#correction-dialog').addEventListener('cancel', (event) => { if (state.busy || $('#correction-note').readOnly) event.preventDefault(); });
+$('#correction-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  if (state.busy) return;
+  const condition = $('#correction-note').value.trim();
+  if (!condition) return formError(form, 'Enter a correction note.');
+  state.busy = true;
+  const button = $('button.primary', form); button.disabled = true;
+  try {
+    // Preserve the same note and key after an uncertain response.
+    state.correction.condition ||= condition;
+    await postAction(`/api/custody/${state.correction.receiptId}/correct`, state.correction.key, { condition: state.correction.condition, deviceId });
+    $('#correction-dialog').close(); feedback('Correction note saved. Stock quantities are unchanged.');
+    try { await loadActivity(); } catch { /* Saved note remains recorded. */ }
+  } catch (error) {
+    if (!error.uncertain) { state.correction.key = id(); state.correction.condition = null; }
+    else { $('#correction-note').readOnly = true; $('#cancel-correction').disabled = true; }
+    formError(form, error.message);
+  } finally { button.disabled = false; state.busy = false; }
+});
+window.addEventListener('online', checkConnection);
+window.addEventListener('offline', checkConnection);
+window.setInterval(checkConnection, 30000);
+let installPrompt;
+window.addEventListener('beforeinstallprompt', (event) => { event.preventDefault(); installPrompt = event; $('#install-button').classList.remove('hidden'); });
+$('#install-button').addEventListener('click', async () => { if (installPrompt) { await installPrompt.prompt(); installPrompt = null; $('#install-button').classList.add('hidden'); } });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+start();

@@ -2,13 +2,24 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
-const dataDir = path.join(__dirname, "..", "data");
+const dataDir = process.env.TONG_DATA_DIR || path.join(__dirname, "..", "data");
 fs.mkdirSync(dataDir, { recursive: true });
 
 const db = new DatabaseSync(path.join(dataDir, "tong.db"));
 db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS saved_submissions (
+    key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, status INTEGER NOT NULL, response TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS reversals (
+    receipt_id INTEGER PRIMARY KEY REFERENCES custody_receipts(id), created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS reversible_entries (
+    receipt_id INTEGER PRIMARY KEY REFERENCES custody_receipts(id),
+    source_type TEXT NOT NULL, source_reference TEXT NOT NULL,
+    UNIQUE (source_type, source_reference)
+  );
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,

@@ -17,6 +17,13 @@ const roleNames = {
 };
 
 function json(res, status, body) {
+  if (res.submission && status < 300) {
+    db.prepare("INSERT INTO saved_submissions (key, fingerprint, status, response) VALUES (?, ?, ?, ?)")
+      .run(res.submission.key, res.submission.fingerprint, status, JSON.stringify(body));
+    db.exec("COMMIT");
+  } else if (res.submission) {
+    db.exec("ROLLBACK");
+  }
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(body));
 }
@@ -27,6 +34,7 @@ function text(res, status, body, type = "text/plain; charset=utf-8") {
 }
 
 function parseJson(req) {
+  if (req.parsedBody) return Promise.resolve(req.parsedBody);
   return new Promise((resolve, reject) => {
     let body = "";
     req.on("data", (chunk) => {
@@ -163,8 +171,8 @@ function dashboard() {
       COALESCE(SUM(freezer), 0) AS freezer
     FROM stock_items
   `).get();
-  const cooked = db.prepare("SELECT COALESCE(SUM(cooked_kilos), 0) AS kilos FROM batches WHERE date(created_at) = date('now')").get().kilos;
-  const waste = db.prepare("SELECT COALESCE(SUM(kilos), 0) AS kilos FROM service_logs WHERE kind = 'LEFTOVER' AND decision = 'DISCARD' AND date(created_at) = date('now')").get().kilos;
+  const cooked = db.prepare("SELECT COALESCE(SUM(cooked_kilos), 0) AS kilos FROM batches b WHERE date(created_at) = date('now') AND NOT EXISTS (SELECT 1 FROM custody_receipts c JOIN reversals r ON r.receipt_id = c.id WHERE c.source_type = 'BATCH' AND c.source_reference = b.reference)").get().kilos;
+  const waste = db.prepare("SELECT COALESCE(SUM(kilos), 0) AS kilos FROM service_logs s WHERE kind = 'LEFTOVER' AND decision = 'DISCARD' AND date(created_at) = date('now') AND NOT EXISTS (SELECT 1 FROM custody_receipts c JOIN reversals r ON r.receipt_id = c.id WHERE c.source_type = 'SERVICE_LOG' AND c.source_reference = 'SERVICE-' || s.id)").get().kilos;
   return {
     ...totals,
     cooked,
@@ -187,6 +195,63 @@ async function route(req, res) {
   if (!pathname.startsWith("/api/")) return serveStatic(req, res, pathname);
 
   try {
+    if (req.method === "POST") {
+      req.parsedBody = await parseJson(req);
+      const key = req.headers["idempotency-key"];
+      if (key) {
+        if (key.length > 100) return json(res, 400, { error: "Invalid submission key." });
+        const fingerprint = JSON.stringify([getUser(req)?.id, pathname, req.parsedBody]);
+        const previous = db.prepare("SELECT * FROM saved_submissions WHERE key = ?").get(key);
+        if (previous) {
+          if (previous.fingerprint !== fingerprint) return json(res, 409, { error: "Submission key already used for another entry." });
+          return json(res, previous.status, JSON.parse(previous.response));
+        }
+        db.exec("BEGIN IMMEDIATE");
+        res.submission = { key, fingerprint };
+      }
+    }
+    const undo = pathname.match(/^\/api\/custody\/(\d+)\/undo$/);
+    if (req.method === "POST" && undo) {
+      const user = requireUser(req, res);
+      if (!user) return;
+      const original = db.prepare("SELECT * FROM custody_receipts WHERE id = ?").get(Number(undo[1]));
+      if (!original) return json(res, 404, { error: "Receipt not found." });
+      if (!db.prepare("SELECT 1 FROM reversible_entries WHERE receipt_id = ?").get(original.id)) return json(res, 409, { error: "This receipt has no reversible transaction. Add a correction note instead." });
+      if (original.actor_id !== user.id && !["OWNER", "MANAGER"].includes(user.role)) return json(res, 403, { error: "Switch to the station that recorded this entry." });
+      if (!["DELIVERY", "BATCH", "SERVICE_LOG"].includes(original.source_type) || original.correction_of || original.action === "CORRECTION") return json(res, 409, { error: "This receipt cannot be undone. Record a correction note instead." });
+      if (db.prepare("SELECT 1 FROM reversals WHERE receipt_id = ?").get(original.id)) return json(res, 409, { error: "This entry has already been undone." });
+      // Conservatively refuse inventory reversal after any later handoff or stock reservation.
+      if (original.source_type !== "SERVICE_LOG" && (
+        db.prepare("SELECT 1 FROM custody_receipts WHERE id > ? LIMIT 1").get(original.id) ||
+        db.prepare("SELECT 1 FROM audit_log WHERE action = 'REQUEST_RESERVED' AND created_at >= ? LIMIT 1").get(original.created_at)
+      )) return json(res, 409, { error: "Later activity may depend on this stock. Record a correction note and ask inventory staff to reconcile it." });
+      db.exec(res.submission ? "SAVEPOINT operation" : "BEGIN IMMEDIATE");
+      try {
+        const items = JSON.parse(original.items_json);
+        if (original.source_type === "DELIVERY") {
+          for (const item of items) {
+            const stock = db.prepare("SELECT * FROM stock_items WHERE id = ?").get(item.stockItemId);
+            if (stock.on_hand - stock.reserved < item.acceptedKilos) throw new Error("Available stock is insufficient for reversal.");
+            db.prepare("UPDATE stock_items SET on_hand = on_hand - ? WHERE id = ?").run(item.acceptedKilos, item.stockItemId);
+            db.prepare("INSERT INTO inventory_ledger (stock_item_id, action, kilos, reference, actor_id, created_at) VALUES (?, 'RECEIPT_REVERSED', ?, ?, ?, ?)").run(item.stockItemId, -item.acceptedKilos, original.source_reference, user.id, now());
+          }
+          db.prepare("UPDATE deliveries SET status = 'REVERSED' WHERE reference = ?").run(original.source_reference);
+          db.prepare("UPDATE alerts SET status = 'ACKNOWLEDGED', acknowledged_by = ?, acknowledged_at = ? WHERE source_reference = ? AND status = 'OPEN'").run(user.id, now(), original.source_reference);
+        }
+        if (original.source_type === "BATCH") {
+          for (const item of items) {
+            const stock = db.prepare("SELECT * FROM stock_items WHERE id = ?").get(item.stockItemId);
+            if (stock.freezer < item.freezerKilos) throw new Error("Freezer stock is insufficient for reversal.");
+            db.prepare("UPDATE stock_items SET on_hand = on_hand + ?, freezer = freezer - ? WHERE id = ?").run(item.rawKilos, item.freezerKilos, item.stockItemId);
+          }
+        }
+        db.prepare("INSERT INTO reversals (receipt_id, created_at) VALUES (?, ?)").run(original.id, now());
+        const receipt = createCustodyReceipt(user, { sourceType: original.source_type, sourceReference: original.source_reference, action: "REVERSED", correctionOf: original.id, kilos: original.kilos, items, deviceId: req.parsedBody.deviceId, condition: "Entry undone; original receipt retained" });
+        audit(user, "ENTRY_REVERSED", "custody_receipt", original.id);
+        db.exec(res.submission ? "RELEASE operation" : "COMMIT");
+        return json(res, 200, { receipt });
+      } catch (error) { db.exec(res.submission ? "ROLLBACK TO operation; RELEASE operation" : "ROLLBACK"); return json(res, 409, { error: error.message }); }
+    }
     if (req.method === "GET" && pathname === "/api/bootstrap") {
       const user = requireUser(req, res);
       if (!user) return;
@@ -218,7 +283,9 @@ async function route(req, res) {
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
       return json(res, 200, {
         receipts: db.prepare(`
-          SELECT c.*, u.name AS actor_name, u.role AS actor_role_name
+          SELECT c.*, u.name AS actor_name, u.role AS actor_role_name,
+            EXISTS (SELECT 1 FROM reversible_entries e WHERE e.receipt_id = c.id) AS reversible,
+            EXISTS (SELECT 1 FROM reversals r WHERE r.receipt_id = c.id) AS reversed
           FROM custody_receipts c JOIN users u ON u.id = c.actor_id
           ${where} ORDER BY c.id DESC LIMIT 200
         `).all(...params)
@@ -234,13 +301,13 @@ async function route(req, res) {
       `).all(user.role) });
     }
     if (req.method === "POST" && pathname === "/api/requests") {
-      const user = requireUser(req, res, ["KITCHEN", "MANAGER"]);
+      const user = requireUser(req, res, ["KITCHEN", "MANAGER", "OWNER"]);
       if (!user) return;
-      const body = await parseJson(req);
+      const body = req.parsedBody;
       const items = safeItems(body.items);
       const reference = nextReference("RF");
       const createdAt = now();
-      db.exec("BEGIN IMMEDIATE");
+      db.exec(res.submission ? "SAVEPOINT operation" : "BEGIN IMMEDIATE");
       try {
         const result = db.prepare(`
           INSERT INTO requests (reference, service, requested_by, status, notes, created_at)
@@ -249,10 +316,10 @@ async function route(req, res) {
         const addItem = db.prepare("INSERT INTO request_items (request_id, stock_item_id, kilos) VALUES (?, ?, ?)");
         for (const item of items) addItem.run(result.lastInsertRowid, item.stockItemId, item.kilos);
         audit(user, "REQUEST_CREATED", "request", result.lastInsertRowid, { reference });
-        db.exec("COMMIT");
+        db.exec(res.submission ? "RELEASE operation" : "COMMIT");
         return json(res, 201, { request: db.prepare("SELECT * FROM requests WHERE id = ?").get(result.lastInsertRowid) });
       } catch (error) {
-        db.exec("ROLLBACK");
+        db.exec(res.submission ? "ROLLBACK TO operation; RELEASE operation" : "ROLLBACK");
         throw error;
       }
     }
@@ -269,11 +336,11 @@ async function route(req, res) {
     if (req.method === "POST" && pathname === "/api/purchases") {
       const user = requireUser(req, res, ["ACCOUNTANT", "MANAGER", "OWNER"]);
       if (!user) return;
-      const body = await parseJson(req);
+      const body = req.parsedBody;
       const items = safeItems(body.items);
       const reference = nextReference("PR");
       const totalEstimate = items.reduce((sum, item) => sum + item.kilos * Number(item.estimatedPrice || 0), 0);
-      db.exec("BEGIN IMMEDIATE");
+      db.exec(res.submission ? "SAVEPOINT operation" : "BEGIN IMMEDIATE");
       try {
         const purchase = db.prepare(`
           INSERT INTO purchase_requests
@@ -287,10 +354,10 @@ async function route(req, res) {
         for (const item of items) addItem.run(purchase.lastInsertRowid, item.stockItemId, item.kilos, Number(item.estimatedPrice || 0));
         audit(user, "PURCHASE_REQUEST_CREATED", "purchase_request", purchase.lastInsertRowid, { reference, totalEstimate });
         createAlert("PENDING APPROVAL", `Purchase ${reference} is waiting for Manager approval.`, "MANAGER", reference, user);
-        db.exec("COMMIT");
+        db.exec(res.submission ? "RELEASE operation" : "COMMIT");
         return json(res, 201, { purchase: db.prepare("SELECT * FROM purchase_requests WHERE id = ?").get(purchase.lastInsertRowid) });
       } catch (error) {
-        db.exec("ROLLBACK");
+        db.exec(res.submission ? "ROLLBACK TO operation; RELEASE operation" : "ROLLBACK");
         throw error;
       }
     }
@@ -323,7 +390,7 @@ async function route(req, res) {
     if (req.method === "POST" && pathname === "/api/payments") {
       const user = requireUser(req, res, ["ACCOUNTANT", "MANAGER", "OWNER"]);
       if (!user) return;
-      const body = await parseJson(req);
+      const body = req.parsedBody;
       const purchase = db.prepare("SELECT * FROM purchase_requests WHERE id = ?").get(Number(body.purchaseRequestId));
       const amount = Number(body.amount);
       if (!purchase || !Number.isFinite(amount) || amount < 0 || !["CASH", "BANK", "GCASH"].includes(body.method)) return json(res, 400, { error: "Valid purchase, amount, and payment method are required." });
@@ -360,7 +427,7 @@ async function route(req, res) {
     if (req.method === "POST" && pathname === "/api/bookings") {
       const user = requireUser(req, res, ["MANAGER", "OWNER"]);
       if (!user) return;
-      const body = await parseJson(req);
+      const body = req.parsedBody;
       const headcount = Number(body.headcount);
       const discount = Number(body.discount || 0);
       if (!body.customerName || !body.serviceDate || !Number.isInteger(headcount) || headcount <= 0 || discount < 0) return json(res, 400, { error: "Customer, service date, headcount, and valid discount are required." });
@@ -383,17 +450,20 @@ async function route(req, res) {
     }
     const requestApproval = pathname.match(/^\/api\/requests\/(\d+)\/(approve|return|cancel|reserve)$/);
     if (req.method === "POST" && requestApproval) {
-      const user = requireUser(req, res, ["MANAGER", "OWNER", "ACCOUNTANT"]);
+      const user = requireUser(req, res, ["MANAGER", "OWNER", "ACCOUNTANT", "KITCHEN"]);
       if (!user) return;
       const requestId = Number(requestApproval[1]);
       const action = requestApproval[2];
       const request = db.prepare("SELECT * FROM requests WHERE id = ?").get(requestId);
       if (!request) return json(res, 404, { error: "Request not found." });
+      if (user.role === "KITCHEN" && (action !== "cancel" || request.requested_by !== user.id)) return json(res, 403, { error: "Kitchen can only cancel its own draft requests." });
+      if (["cancel", "return", "approve"].includes(action) && request.status !== "DRAFT") return json(res, 409, { error: "This request has progressed. Refresh to see its current status." });
+      if (action === "reserve" && request.status !== "APPROVED") return json(res, 409, { error: "Only approved requests can be reserved once." });
       if (action === "approve" && !["MANAGER", "OWNER"].includes(user.role)) return json(res, 403, { error: "Only Manager or Owner can approve requests." });
       if (action === "reserve") {
         if (!["ACCOUNTANT", "MANAGER", "OWNER"].includes(user.role)) return json(res, 403, { error: "Only inventory staff can reserve stock." });
         const items = db.prepare("SELECT * FROM request_items WHERE request_id = ?").all(requestId);
-        db.exec("BEGIN IMMEDIATE");
+        db.exec(res.submission ? "SAVEPOINT operation" : "BEGIN IMMEDIATE");
         try {
           for (const item of items) {
             const stock = db.prepare("SELECT * FROM stock_items WHERE id = ?").get(item.stock_item_id);
@@ -404,9 +474,9 @@ async function route(req, res) {
           }
           db.prepare("UPDATE requests SET status = 'PENDING_FULFILLMENT' WHERE id = ?").run(requestId);
           audit(user, "REQUEST_RESERVED", "request", requestId, { reference: request.reference });
-          db.exec("COMMIT");
+          db.exec(res.submission ? "RELEASE operation" : "COMMIT");
         } catch (error) {
-          db.exec("ROLLBACK");
+          db.exec(res.submission ? "ROLLBACK TO operation; RELEASE operation" : "ROLLBACK");
           throw error;
         }
         return json(res, 200, { request: db.prepare("SELECT * FROM requests WHERE id = ?").get(requestId) });
@@ -419,14 +489,15 @@ async function route(req, res) {
     if (req.method === "POST" && pathname === "/api/deliveries") {
       const user = requireUser(req, res, ["ACCOUNTANT", "MANAGER", "OWNER"]);
       if (!user) return;
-      const body = await parseJson(req);
+      const body = req.parsedBody;
       const items = safeItems(body.items).map((item) => ({
         ...item,
         acceptedKilos: Math.max(0, Number(body.items.find((entry) => Number(entry.stockItemId) === item.stockItemId)?.acceptedKilos ?? item.kilos)),
         rejectedKilos: Math.max(0, Number(body.items.find((entry) => Number(entry.stockItemId) === item.stockItemId)?.rejectedKilos ?? 0))
       }));
+      if (!items.every((item) => Number.isFinite(item.acceptedKilos) && Number.isFinite(item.rejectedKilos) && item.acceptedKilos + item.rejectedKilos <= item.kilos)) return json(res, 400, { error: "Valid accepted and rejected kilos are required; totals cannot exceed ordered kilos." });
       const reference = nextReference("DR");
-      db.exec("BEGIN IMMEDIATE");
+      db.exec(res.submission ? "SAVEPOINT operation" : "BEGIN IMMEDIATE");
       try {
         const delivery = db.prepare(`
           INSERT INTO deliveries (reference, supplier_name, status, eta, receipt_photo, notes, received_by, created_at)
@@ -449,6 +520,7 @@ async function route(req, res) {
         }
         const receipt = createCustodyReceipt(user, {
           sourceType: "DELIVERY",
+          deviceId: body.deviceId,
           sourceReference: reference,
           action: "DELIVERY_RECEIVED",
           items: items.map((item) => ({ stockItemId: item.stockItemId, orderedKilos: item.kilos, acceptedKilos: item.acceptedKilos, rejectedKilos: item.rejectedKilos })),
@@ -457,18 +529,19 @@ async function route(req, res) {
           photoPath: body.photoPath || null
         });
         if (items.some((item) => item.rejectedKilos > 0)) createAlert("PARTIAL / REJECTED", `Delivery ${reference} has rejected or missing kilos.`, "MANAGER", reference, user);
+        db.prepare("INSERT INTO reversible_entries (receipt_id, source_type, source_reference) VALUES (?, ?, ?)").run(receipt.id, receipt.source_type, receipt.source_reference);
         audit(user, "DELIVERY_RECEIVED", "delivery", delivery.lastInsertRowid, { reference });
-        db.exec("COMMIT");
+        db.exec(res.submission ? "RELEASE operation" : "COMMIT");
         return json(res, 201, { delivery: db.prepare("SELECT * FROM deliveries WHERE id = ?").get(delivery.lastInsertRowid), receipt });
       } catch (error) {
-        db.exec("ROLLBACK");
+        db.exec(res.submission ? "ROLLBACK TO operation; RELEASE operation" : "ROLLBACK");
         throw error;
       }
     }
     if (req.method === "POST" && pathname === "/api/custody") {
       const user = requireUser(req, res, ["OWNER", "MANAGER", "ACCOUNTANT", "KITCHEN", "WAITER"]);
       if (!user) return;
-      const body = await parseJson(req);
+      const body = req.parsedBody;
       if (!body.sourceReference || !body.action) return json(res, 400, { error: "sourceReference and action are required." });
       return json(res, 201, { receipt: createCustodyReceipt(user, body) });
     }
@@ -478,7 +551,7 @@ async function route(req, res) {
       if (!user) return;
       const original = db.prepare("SELECT * FROM custody_receipts WHERE id = ?").get(Number(custodyCorrection[1]));
       if (!original) return json(res, 404, { error: "Receipt not found." });
-      const body = await parseJson(req);
+      const body = req.parsedBody;
       return json(res, 201, { receipt: createCustodyReceipt(user, {
         ...body,
         sourceType: original.source_type,
@@ -490,21 +563,25 @@ async function route(req, res) {
     if (req.method === "POST" && pathname === "/api/batches") {
       const user = requireUser(req, res, ["KITCHEN", "MANAGER", "OWNER"]);
       if (!user) return;
-      const body = await parseJson(req);
+      const body = req.parsedBody;
       const rawKilos = Number(body.rawKilos);
       const cookedKilos = Number(body.cookedKilos);
       const stockItemId = Number(body.stockItemId);
-      if (!stockItemId || rawKilos <= 0 || cookedKilos < 0) return json(res, 400, { error: "Valid raw and cooked kilos are required." });
+      const freezerKilos = Number(body.freezerKilos || 0);
+      if (!stockItemId || ![rawKilos, cookedKilos, freezerKilos].every(Number.isFinite) || rawKilos <= 0 || cookedKilos < 0 || freezerKilos < 0 || freezerKilos > cookedKilos) return json(res, 400, { error: "Valid raw, cooked and freezer kilos are required. Freezer kilos cannot exceed cooked kilos." });
+      const stock = db.prepare("SELECT * FROM stock_items WHERE id = ?").get(stockItemId);
+      if (!stock || stock.on_hand - stock.reserved < rawKilos) return json(res, 409, { error: "Available stock changed or is insufficient. Refresh availability and adjust raw kilos." });
       const reference = nextReference("BATCH");
-      db.exec("BEGIN IMMEDIATE");
+      db.exec(res.submission ? "SAVEPOINT operation" : "BEGIN IMMEDIATE");
       try {
         const result = db.prepare(`
           INSERT INTO batches (reference, stock_item_id, raw_kilos, cooked_kilos, freezer_kilos, service, created_by, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `).run(reference, stockItemId, rawKilos, cookedKilos, Number(body.freezerKilos || 0), body.service || "LUNCH", user.id, now());
         db.prepare("UPDATE stock_items SET on_hand = MAX(0, on_hand - ?), freezer = freezer + ? WHERE id = ?").run(rawKilos, Number(body.freezerKilos || 0), stockItemId);
-        createCustodyReceipt(user, {
+        const receipt = createCustodyReceipt(user, {
           sourceType: "BATCH",
+          deviceId: body.deviceId,
           sourceReference: reference,
           action: "RAW_RELEASED_TO_COOK",
           items: [{ stockItemId, rawKilos, cookedKilos, freezerKilos: Number(body.freezerKilos || 0) }],
@@ -512,30 +589,36 @@ async function route(req, res) {
           condition: "COOKING_STARTED"
         });
         audit(user, "BATCH_CREATED", "batch", result.lastInsertRowid, { reference });
-        db.exec("COMMIT");
-        return json(res, 201, { batch: db.prepare("SELECT * FROM batches WHERE id = ?").get(result.lastInsertRowid) });
+        db.prepare("INSERT INTO reversible_entries (receipt_id, source_type, source_reference) VALUES (?, ?, ?)").run(receipt.id, receipt.source_type, receipt.source_reference);
+        db.exec(res.submission ? "RELEASE operation" : "COMMIT");
+        return json(res, 201, { batch: db.prepare("SELECT * FROM batches WHERE id = ?").get(result.lastInsertRowid), receipt });
       } catch (error) {
-        db.exec("ROLLBACK");
+        db.exec(res.submission ? "ROLLBACK TO operation; RELEASE operation" : "ROLLBACK");
         throw error;
       }
     }
     if (req.method === "POST" && pathname === "/api/service-logs") {
       const user = requireUser(req, res, ["KITCHEN", "WAITER", "MANAGER", "OWNER"]);
       if (!user) return;
-      const body = await parseJson(req);
+      const body = req.parsedBody;
       const kilos = Number(body.kilos || 0);
+      if (!Number.isFinite(kilos) || kilos <= 0 || !["DISPLAY", "REFILL", "FREEZER_OUT", "LEFTOVER"].includes(body.kind) || !db.prepare("SELECT 1 FROM stock_items WHERE id = ?").get(Number(body.stockItemId)) || !["", "REUSE", "REFREEZE", "DISCARD"].includes(body.decision || "")) return json(res, 400, { error: "A valid event, dish, decision and positive kilos are required." });
+      if (body.decision && body.kind !== "LEFTOVER") return json(res, 400, { error: "Decisions apply only to leftover counts." });
+      if (body.decision === "DISCARD" && !String(body.reason || "").trim()) return json(res, 400, { error: "A discard reason is required." });
       const result = db.prepare(`
         INSERT INTO service_logs (kind, stock_item_id, kilos, service, decision, reason, actor_id, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(body.kind || "DISPLAY", body.stockItemId ? Number(body.stockItemId) : null, kilos, body.service || null, body.decision || null, body.reason || null, user.id, now());
       const receipt = createCustodyReceipt(user, {
         sourceType: "SERVICE_LOG",
+        deviceId: body.deviceId,
         sourceReference: `SERVICE-${result.lastInsertRowid}`,
         action: body.kind || "SERVICE_LOGGED",
         items: body.stockItemId ? [{ stockItemId: Number(body.stockItemId), kilos }] : [],
         kilos,
         condition: body.decision || "RECORDED"
       });
+      db.prepare("INSERT INTO reversible_entries (receipt_id, source_type, source_reference) VALUES (?, ?, ?)").run(receipt.id, receipt.source_type, receipt.source_reference);
       return json(res, 201, { log: { id: result.lastInsertRowid }, receipt });
     }
     if (req.method === "POST" && pathname.startsWith("/api/alerts/")) {

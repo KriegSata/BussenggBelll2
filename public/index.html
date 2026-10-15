@@ -1,115 +1,97 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#0f766e">
-    <meta name="description" content="Tong Seafood Buffet station operations">
-    <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="stylesheet" href="/styles.css">
-    <title>Tong Buffet Operations</title>
-  </head>
-  <body>
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">TONG SEAFOOD BUFFET</p>
-        <h1>Operations desk</h1>
-      </div>
-      <label class="user-switcher">
-        <span>Working as</span>
-        <select id="user-select" aria-label="Current station user"></select>
-      </label>
-    </header>
-
-    <main class="app-shell">
-      <section id="notice" class="notice hidden" role="status"></section>
-      <section class="hero">
-        <div>
-          <p class="eyebrow">TODAY'S CONTROL CENTRE</p>
-          <h2 id="welcome">Loading your station…</h2>
-          <p class="muted">Every handoff is acknowledged so you always know who handled each delivery, kilo, and decision.</p>
-        </div>
-        <button id="install-button" class="secondary hidden">Install app</button>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="description" content="Tong Seafood Buffet station operations">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/styles.css">
+  <title>Tong · Station workspace</title>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">Skip to workspace</a>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">T</span><div><p class="eyebrow">TONG SEAFOOD BUFFET</p><h1>Station workspace</h1></div></div>
+    <div class="station-controls">
+      <label>Station<select id="station-select" aria-label="Change station"></select></label>
+      <label>Service<select id="current-service"><option value="LUNCH">Lunch</option><option value="DINNER">Dinner</option><option value="CATERING">Catering</option></select></label>
+      <span id="connection" role="status">Checking connection…</span>
+    </div>
+  </header>
+  <main class="app-shell" id="workspace" tabindex="-1">
+    <nav class="tabs" aria-label="Station tasks">
+      <button data-task="request">Request stock</button>
+      <button data-task="delivery">Receive delivery</button>
+      <button data-task="batch">Log cooking</button>
+      <button data-task="service">Log service</button>
+      <button data-task="activity">Recent activity</button>
+      <button data-task="overview">Overview</button>
+    </nav>
+    <div id="startup-error" class="card hidden" role="alert"><p>Could not load this station. Check the connection and try again.</p><button id="retry-start" class="primary">Retry loading</button></div>
+    <div id="workspace-content" hidden>
+      <div class="workspace-heading"><div><p class="eyebrow" id="station-label">OPEN STATION</p><h2 id="task-title">Request stock</h2></div><div><button id="refresh-stock" class="text-button">Refresh stock</button><button id="install-button" class="secondary hidden">Install app</button></div></div>
+      <p class="station-note">Open access · Entries are recorded against this station, without verified staff identity.</p>
+      <section class="view" data-panel="request">
+        <form id="request-form" class="card entry-form">
+          <label>Dish / stock item<select id="request-item" class="item-select" required></select></label>
+          <div class="stock-hint" data-stock-for="request-item"></div>
+          <label>Quantity (kg)<input id="request-kilos" type="number" min="0.1" step="0.1" inputmode="decimal" required placeholder="Enter kilos"></label>
+          <details><summary>Add a note (optional)</summary><label>Note<input id="request-notes" placeholder="For example, group booking at 6 PM"></label></details>
+          <p class="entry-summary" aria-live="polite"></p>
+          <p class="form-error hidden" role="alert"></p>
+          <div class="form-actions"><button type="button" class="secondary clear-draft">Clear entry</button><button class="primary" type="submit">Save request</button></div>
+        </form>
+        <details class="card"><summary>Requests & approvals</summary><div id="requests" class="table-card"></div></details>
       </section>
-
-      <nav class="tabs" aria-label="Main sections">
-        <button class="tab active" data-view="overview">Overview</button>
-        <button class="tab" data-view="requests">Requests</button>
-        <button class="tab" data-view="receiving">Receiving</button>
-        <button class="tab" data-view="operations">Kitchen & service</button>
-        <button class="tab" data-view="custody">Who handled it?</button>
-      </nav>
-
-      <section id="overview-view" class="view active">
-        <div id="metrics" class="metrics"></div>
-        <div class="two-column">
-          <article class="card">
-            <div class="card-heading"><div><p class="eyebrow">ATTENTION</p><h3>Open alerts</h3></div><button class="text-button" id="refresh-alerts">Refresh</button></div>
-            <div id="alerts" class="stack"></div>
-          </article>
-          <article class="card">
-            <div class="card-heading"><div><p class="eyebrow">LATEST HANDOFFS</p><h3>Custody receipts</h3></div><button class="text-button" data-view-target="custody">View all</button></div>
-            <div id="recent-custody" class="stack"></div>
-          </article>
-        </div>
+      <section class="view" data-panel="delivery">
+        <form id="delivery-form" class="card entry-form">
+          <label>Supplier<input id="supplier-name" required placeholder="Supplier name" list="suppliers"></label><datalist id="suppliers"></datalist>
+          <p class="muted">Enter accepted kilos only. Leave undelivered items blank.</p>
+          <div id="delivery-items"></div>
+          <details><summary>Add proof note (optional)</summary><label>Receipt / proof note<input id="delivery-photo" placeholder="Receipt reference or note"></label></details>
+          <p class="entry-summary" aria-live="polite"></p><p class="form-error hidden" role="alert"></p>
+          <div class="form-actions"><button type="button" class="secondary clear-draft">Clear entry</button><button class="primary" type="submit">Save delivery</button></div>
+        </form>
       </section>
-
-      <section id="requests-view" class="view">
-        <div class="section-heading"><div><p class="eyebrow">KITCHEN → MANAGER → ACCOUNTANT</p><h2>Food requests</h2><p class="muted">Request the kilos you need to cook. Stock is reserved before anything new is purchased.</p></div><button class="primary" id="new-request-button">New request</button></div>
-        <div id="request-form" class="card form-card hidden">
-          <form id="request-form-element">
-            <div class="form-grid">
-              <label>Service<select id="request-service"><option value="LUNCH">Lunch</option><option value="DINNER">Dinner</option><option value="CATERING">Catering</option></select></label>
-              <label>Notes<input id="request-notes" placeholder="Example: company group at 6 PM"></label>
-            </div>
-            <div id="request-items"></div>
-            <div class="form-actions"><button type="button" class="secondary" id="cancel-request">Cancel</button><button class="primary">Submit request</button></div>
-          </form>
-        </div>
-        <div id="requests" class="card table-card"></div>
+      <section class="view" data-panel="batch">
+        <form id="batch-form" class="card entry-form">
+          <label>Dish<select id="batch-item" class="item-select" required></select></label>
+          <div class="stock-hint" data-stock-for="batch-item"></div>
+          <div class="form-grid"><label>Raw quantity (kg)<input id="raw-kilos" type="number" min="0.1" step="0.1" inputmode="decimal" required placeholder="Enter kilos"></label><label>Cooked quantity (kg)<input id="cooked-kilos" type="number" min="0" step="0.1" inputmode="decimal" required placeholder="Enter kilos"></label></div>
+          <details id="freezer-details"><summary>Put some in freezer (optional)</summary><label>Freezer quantity (kg)<input id="freezer-kilos" type="number" min="0" step="0.1" inputmode="decimal" placeholder="0"></label></details>
+          <p class="entry-summary" aria-live="polite"></p><p class="form-error hidden" role="alert"></p>
+          <div class="form-actions"><button type="button" class="secondary clear-draft">Clear entry</button><button class="primary" type="submit">Save cooking batch</button></div>
+        </form>
       </section>
-
-      <section id="receiving-view" class="view">
-        <div class="section-heading"><div><p class="eyebrow">ACCOUNTANT + KITCHEN CONFIRMATION</p><h2>Receive a delivery</h2><p class="muted">Accepted kilos enter stock. Rejected or missing kilos stay outstanding and create an alert.</p></div></div>
-        <div class="card form-card">
-          <form id="delivery-form">
-            <div class="form-grid">
-              <label>Supplier<input id="supplier-name" required placeholder="Pasil Seafood Market"></label>
-              <label>Photo or proof note<input id="delivery-photo" placeholder="receipt-photo.jpg or cash purchase note"></label>
-            </div>
-            <div id="delivery-items"></div>
-            <div class="form-actions"><button class="primary">Record delivery & create receipt</button></div>
-          </form>
-        </div>
+      <section class="view" data-panel="service">
+        <form id="service-form" class="card entry-form">
+          <fieldset><legend>What happened?</legend><div class="event-options">
+            <label><input type="radio" name="event-kind" value="REFILL" checked><span>Refill</span></label>
+            <label><input type="radio" name="event-kind" value="DISPLAY"><span>Display</span></label>
+            <label><input type="radio" name="event-kind" value="FREEZER_OUT"><span>Freezer out</span></label>
+            <label><input type="radio" name="event-kind" value="LEFTOVER"><span>Leftover</span></label>
+          </div></fieldset>
+          <label>Dish<select id="service-item" class="item-select" required></select></label>
+          <div class="stock-hint" data-stock-for="service-item"></div>
+          <label>Quantity (kg)<input id="service-kilos" type="number" min="0.1" step="0.1" inputmode="decimal" required placeholder="Enter kilos"></label>
+          <div id="leftover-fields" hidden><label>Decision<select id="service-decision"><option value="">Count only</option><option value="REUSE">Reuse</option><option value="REFREEZE">Re-freeze</option><option value="DISCARD">Discard</option></select></label><label id="reason-field" hidden>Discard reason<input id="service-reason"></label></div>
+          <p class="entry-summary" aria-live="polite"></p><p class="form-error hidden" role="alert"></p>
+          <div class="form-actions"><button type="button" class="secondary clear-draft">Clear entry</button><button class="primary" type="submit">Save service event</button></div>
+        </form>
       </section>
-
-      <section id="operations-view" class="view">
-        <div class="section-heading"><div><p class="eyebrow">KITCHEN + WAITER</p><h2>Log today's work</h2><p class="muted">Record cooking yields, freezer movement, display refills, and leftover decisions with a named acknowledgement.</p></div></div>
-        <div class="two-column">
-          <form id="batch-form" class="card form-card">
-            <p class="eyebrow">COOKING BATCH</p><h3>Raw kilos → cooked kilos</h3>
-            <label>Dish<select class="item-select" id="batch-item"></select></label>
-            <div class="form-grid"><label>Raw kg<input id="raw-kilos" type="number" min="0.1" step="0.1" required></label><label>Cooked kg<input id="cooked-kilos" type="number" min="0" step="0.1" required></label></div>
-            <div class="form-grid"><label>Freezer kg<input id="freezer-kilos" type="number" min="0" step="0.1" value="0"></label><label>Service<select id="batch-service"><option>LUNCH</option><option>DINNER</option><option>CATERING</option></select></label></div>
-            <button class="primary">Log batch & acknowledge</button>
-          </form>
-          <form id="service-form" class="card form-card">
-            <p class="eyebrow">SERVICE EVENT</p><h3>Display, refill, or leftover</h3>
-            <label>Event<select id="service-kind"><option value="DISPLAY">Buffet display</option><option value="REFILL">Buffet refill</option><option value="FREEZER_OUT">Freezer out / preheat</option><option value="LEFTOVER">Leftover count</option></select></label>
-            <label>Dish<select class="item-select" id="service-item"></select></label>
-            <label>Kilos<input id="service-kilos" type="number" min="0" step="0.1" required></label>
-            <label>Decision<select id="service-decision"><option value="">Recorded only</option><option value="REUSE">Reuse</option><option value="REFREEZE">Re-freeze</option><option value="DISCARD">Discard</option></select></label>
-            <label>Reason<input id="service-reason" placeholder="Required for discard"></label>
-            <button class="primary">Log service event & acknowledge</button>
-          </form>
-        </div>
+      <section class="view" data-panel="activity">
+        <div class="section-heading"><p class="muted">Original receipts stay in the history after undo or correction.</p><button id="print-custody" class="secondary">Print history</button></div>
+        <div id="activity" class="stack"></div>
       </section>
-
-      <section id="custody-view" class="view">
-        <div class="section-heading"><div><p class="eyebrow">IMMUTABLE DIGITAL RECEIPTS</p><h2>Who handled it?</h2><p class="muted">A chronological, printable trail of deliveries, storage, cooking, display, and decisions.</p></div><button class="secondary" id="print-custody">Print history</button></div>
-        <div class="card table-card"><div id="custody-table"></div></div>
-      </section>
-    </main>
-    <script src="/app.js"></script>
-  </body>
+      <section class="view" data-panel="overview"><div id="metrics" class="metrics"></div><article class="card"><div class="section-heading"><h3>Needs attention</h3><button id="refresh-alerts" class="secondary">Refresh</button></div><div id="alerts" class="stack"></div></article></section>
+      <aside id="feedback" class="feedback" hidden aria-label="Last action">
+        <div id="feedback-message" role="status" aria-live="polite" aria-atomic="true">Ready for your next entry.</div><button id="undo-button" class="secondary" hidden>Undo</button>
+      </aside>
+    </div>
+  </main>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Check this entry</h2><p id="confirm-message"></p><div class="form-actions"><button value="cancel" class="secondary" autofocus>Go back</button><button value="confirm" class="primary">Confirm</button></div></form></dialog>
+  <dialog id="correction-dialog" aria-labelledby="correction-title"><form id="correction-form"><h2 id="correction-title">Add a correction note</h2><p class="muted">This adds a linked note. It does not change stock. Ask inventory staff to reconcile any quantity changes.</p><label>What needs correcting?<textarea id="correction-note" required rows="4"></textarea></label><p class="form-error hidden" role="alert"></p><div class="form-actions"><button type="button" id="cancel-correction" class="secondary">Cancel</button><button class="primary">Save note</button></div></form></dialog>
+  <script src="/app.js"></script>
+</body>
 </html>
