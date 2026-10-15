@@ -201,3 +201,29 @@ test("a manually recorded receipt cannot manufacture an inventory reversal", asy
   assert.equal((await request(`/api/custody/${manual.body.receipt.id}/undo`, { method: 'POST' })).response.status, 409);
   assert.deepEqual((await request('/api/inventory')).body.items, before);
 });
+
+test("delivery accepts typed food names, reuses existing names, and retries without duplicates", async () => {
+  const before = (await request('/api/inventory')).body.items.find((item) => item.id === 1).onHand;
+  const options = { method: 'POST', headers: { 'idempotency-key': 'typed-food-delivery' }, body: JSON.stringify({ supplierName: 'Mixed delivery', items: [{ name: '  Fresh   Squid  ', kilos: 3 }, { name: 'shrimp', kilos: 2 }] }) };
+  const created = await request('/api/deliveries', options);
+  assert.equal(created.response.status, 201);
+  const inventory = (await request('/api/inventory')).body.items;
+  const squid = inventory.find((item) => item.name === 'Fresh Squid');
+  assert.equal(squid.onHand, 3);
+  assert.equal(squid.category, 'Other');
+  assert.equal(inventory.find((item) => item.id === 1).onHand, before + 2);
+  const replay = await request('/api/deliveries', options);
+  assert.equal(replay.body.receipt.id, created.body.receipt.id);
+  assert.equal((await request('/api/inventory')).body.items.filter((item) => item.name.toLowerCase() === 'fresh squid').length, 1);
+  const reversed = await request(`/api/custody/${created.body.receipt.id}/undo`, { method: 'POST' });
+  assert.equal(reversed.response.status, 200);
+  assert.equal((await request('/api/inventory')).body.items.find((item) => item.id === squid.id).onHand, 0);
+  assert.equal((await request('/api/inventory')).body.items.find((item) => item.id === 1).onHand, before);
+});
+
+test("duplicate food rows roll back the delivery and any newly created stock", async () => {
+  const before = (await request('/api/inventory')).body.items;
+  const result = await request('/api/deliveries', { method: 'POST', headers: { 'idempotency-key': 'duplicate-food-rows' }, body: JSON.stringify({ items: [{ name: 'Rollback food', kilos: 1 }, { name: 'rollback food', kilos: 2 }] }) });
+  assert.equal(result.response.status, 400);
+  assert.deepEqual((await request('/api/inventory')).body.items, before);
+});

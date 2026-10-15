@@ -21,6 +21,10 @@ device. The application stores its database in `data/tong.db`.
   keyboard focus. Use Tab to move between fields and Enter to submit the form.
 - Quantities start blank. Dish selection and service context stay ready for the
   next entry; unsaved drafts are kept separately for each station and task.
+- Receiving uses a food field with dropdown suggestions and manual typing. Add
+  rows for mixed deliveries. Unlisted names create stock items in the Other
+  category when the delivery is saved; existing names are matched without case
+  sensitivity. Duplicate food rows must be combined before saving.
 - Save feedback stays visible with Undo. Recent activity offers undo for eligible
   entries and linked correction notes for records that need explanation.
 - Undo reverses accepted delivery stock or a cooking batch atomically and retains

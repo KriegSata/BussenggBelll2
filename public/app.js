@@ -39,7 +39,20 @@ function formError(form, message) {
   error.classList.toggle('hidden', !message);
 }
 function fieldValues(form) {
-  return $$('input, select, textarea', form).filter((field) => field.id).reduce((values, field) => ({ ...values, [field.id]: field.value }), { eventKind: $('input[name="event-kind"]:checked', form)?.value });
+  const values = $$('input, select, textarea', form).filter((field) => field.id).reduce((values, field) => ({ ...values, [field.id]: field.value }), { eventKind: $('input[name="event-kind"]:checked', form)?.value });
+  if (form.id === 'delivery-form') values.deliveryRows = deliveryRows();
+  return values;
+}
+function deliveryRows() {
+  return $$('#delivery-items .delivery-row').map((row) => ({ name: $('.delivery-food', row).value, kilos: $('.accepted-kilos', row).value }));
+}
+function renderDeliveryRows(rows = [{}]) {
+  $('#delivery-items').innerHTML = rows.map((row, index) => `<div class="delivery-row"><label>Food<input class="delivery-food" list="food-options" maxlength="100" required placeholder="Choose or type food" value="${escapeHTML(row.name || '')}" aria-label="Food ${index + 1}"></label><label>Accepted kg<input class="accepted-kilos" type="number" min="0.1" step="0.1" inputmode="decimal" required placeholder="Kilos" value="${escapeHTML(row.kilos || '')}" aria-label="Accepted kilos for food ${index + 1}"></label><button type="button" class="text-button remove-delivery-item" aria-label="Remove food ${index + 1}">Remove</button></div>`).join('');
+}
+function populateStockOptions() {
+  const options = '<option value="" disabled selected>Choose a dish</option>' + state.bootstrap.items.map((item) => `<option value="${item.id}">${escapeHTML(item.name)}</option>`).join('');
+  $$('.item-select').forEach((select) => { const previous = select.value; select.innerHTML = options; if (previous) select.value = previous; });
+  $('#food-options').innerHTML = state.bootstrap.items.map((item) => `<option value="${escapeHTML(item.name)}"></option>`).join('');
 }
 function saveDraft(form, task) { store.set(key('draft', task), fieldValues(form)); }
 function restoreForm(task) {
@@ -47,6 +60,7 @@ function restoreForm(task) {
   if (!form) return;
   form.reset();
   const draft = store.get(key('draft', task), {});
+  if (task === 'delivery') renderDeliveryRows(draft.deliveryRows?.length ? draft.deliveryRows : [{}]);
   for (const [fieldId, value] of Object.entries(draft)) {
     const field = document.getElementById(fieldId);
     if (field && form.contains(field)) field.value = value;
@@ -90,7 +104,7 @@ function updateSummary(task) {
   if (task === 'request' && $('#request-kilos').value) text = `${item('#request-item')} · ${kg($('#request-kilos').value)}`;
   if (task === 'batch' && $('#raw-kilos').value) text = `${item('#batch-item')} · ${kg($('#raw-kilos').value)} raw → ${kg($('#cooked-kilos').value)} cooked`;
   if (task === 'service' && $('#service-kilos').value) text = `${$('input[name="event-kind"]:checked').nextElementSibling.textContent} · ${item('#service-item')} · ${kg($('#service-kilos').value)}`;
-  if (task === 'delivery') text = $$('.accepted-kilos').filter((field) => Number(field.value) > 0).map((field) => `${field.dataset.name} ${kg(field.value)}`).join(' · ');
+  if (task === 'delivery') text = deliveryRows().filter((row) => row.name.trim() && Number(row.kilos) > 0).map((row) => `${row.name.trim()} ${kg(row.kilos)}`).join(' · ');
   $('.entry-summary', form).textContent = text ? `${text} · ${$('#current-service').selectedOptions[0].textContent}` : 'Enter quantities to prepare this entry.';
 }
 async function setTask(task, focus = true) {
@@ -121,7 +135,16 @@ function payload(task) {
   const service = $('#current-service').value;
   if (task === 'request') return { path: '/api/requests', body: { service, notes: $('#request-notes').value, items: [{ stockItemId: Number($('#request-item').value), kilos: Number($('#request-kilos').value) }] } };
   if (task === 'delivery') {
-    const items = $$('.accepted-kilos').filter((field) => Number(field.value) > 0).map((field) => ({ stockItemId: Number(field.dataset.stockId), kilos: Number(field.value), acceptedKilos: Number(field.value), rejectedKilos: 0 }));
+    const names = new Set();
+    const items = deliveryRows().map((row) => {
+      const name = row.name.trim().replace(/\s+/g, ' ');
+      if (!name || !Number.isFinite(Number(row.kilos)) || Number(row.kilos) <= 0) throw new Error('Choose or type a food and enter positive accepted kilos for each row.');
+      const normalized = name.toLocaleLowerCase();
+      if (names.has(normalized)) throw new Error(`Combine ${name} into one row to avoid counting it twice.`);
+      names.add(normalized);
+      const stock = state.bootstrap.items.find((item) => item.name.toLocaleLowerCase() === normalized);
+      return { ...(stock ? { stockItemId: stock.id } : { name }), kilos: Number(row.kilos), acceptedKilos: Number(row.kilos), rejectedKilos: 0 };
+    });
     if (!items.length) throw new Error('Enter accepted kilos for at least one item.');
     return { path: '/api/deliveries', body: { supplierName: $('#supplier-name').value.trim(), photoPath: $('#delivery-photo').value, items } };
   }
@@ -139,6 +162,7 @@ function payload(task) {
 async function refreshStock() {
   const { items } = await api('/api/inventory');
   state.bootstrap.items = items;
+  populateStockOptions();
   availableHints();
 }
 async function submitEntry(event, task) {
@@ -168,7 +192,7 @@ async function submitEntry(event, task) {
     // Keep context for rapid repeated entries; quantities and notes must be entered again.
     $$('.item-select', form).forEach((field) => { field.value = previous[field.id]; });
     if (task === 'service') $$('input[name="event-kind"]', form).find((field) => field.value === previous.eventKind).checked = true;
-    if (task === 'delivery') $('#supplier-name').value = previous['supplier-name'];
+    if (task === 'delivery') { renderDeliveryRows(); $('#supplier-name').value = previous['supplier-name']; }
     saveDraft(form, task);
     updateSummary(task);
     feedback(`Saved: ${pending.summary}`, false, undo);
@@ -266,7 +290,6 @@ function useStation(user, initial = false) {
   state.user = user;
   store.set('station', user.id);
   $('#station-select').value = user.id;
-  $('#station-label').textContent = `${user.station} · Open access`;
   const allowed = [...tasks[user.role], 'activity', 'overview'];
   $$('[data-task]').forEach((button) => { button.hidden = !allowed.includes(button.dataset.task); });
   $('[data-task="request"]').textContent = user.role === 'ACCOUNTANT' ? 'Requests' : 'Request stock';
@@ -284,10 +307,8 @@ async function start() {
   try {
     state.bootstrap = await api('/api/bootstrap');
     $('#station-select').innerHTML = state.bootstrap.users.map((user) => `<option value="${escapeHTML(user.id)}">${escapeHTML(user.station.replace(' PC', ''))}</option>`).join('');
-    const options = '<option value="" disabled selected>Choose a dish</option>' + state.bootstrap.items.map((item) => `<option value="${item.id}">${escapeHTML(item.name)}</option>`).join('');
-    $$('.item-select').forEach((select) => { select.innerHTML = options; });
+    populateStockOptions();
     $('#suppliers').innerHTML = state.bootstrap.suppliers.map((supplier) => `<option value="${escapeHTML(supplier.name)}"></option>`).join('');
-    $('#delivery-items').innerHTML = state.bootstrap.items.map((item) => `<div class="delivery-row"><div>${escapeHTML(item.name)}<small>Accepted kilos</small></div><label class="quantity-label"><span class="small">${escapeHTML(item.name)} (kg)</span><input id="delivery-kg-${item.id}" class="accepted-kilos" data-stock-id="${item.id}" data-name="${escapeHTML(item.name)}" type="number" min="0" step="0.1" inputmode="decimal" placeholder="—"></label></div>`).join('');
     $('#current-service').value = store.get('service', new Date().getHours() >= 15 ? 'DINNER' : 'LUNCH');
     $('#workspace-content').hidden = false;
     $('#startup-error').classList.add('hidden');
@@ -326,6 +347,23 @@ $('#refresh-stock').addEventListener('click', async () => {
   finally { button.disabled = false; }
 });
 $('#retry-start').addEventListener('click', start);
+$('#add-delivery-item').addEventListener('click', () => {
+  if (state.busy || store.get(key('pending', 'delivery'))) return;
+  renderDeliveryRows([...deliveryRows(), {}]);
+  saveDraft($('#delivery-form'), 'delivery');
+  updateSummary('delivery');
+  $$('#delivery-items .delivery-food').at(-1).focus();
+});
+$('#delivery-items').addEventListener('click', (event) => {
+  const button = event.target.closest('.remove-delivery-item');
+  if (!button || state.busy || store.get(key('pending', 'delivery'))) return;
+  const rows = deliveryRows();
+  rows.splice($$('#delivery-items .delivery-row').indexOf(button.closest('.delivery-row')), 1);
+  renderDeliveryRows(rows.length ? rows : [{}]);
+  saveDraft($('#delivery-form'), 'delivery');
+  updateSummary('delivery');
+  $('#delivery-items .delivery-food').focus();
+});
 $('#cancel-correction').addEventListener('click', () => { if (!state.busy) $('#correction-dialog').close(); });
 $('#correction-dialog').addEventListener('cancel', (event) => { if (state.busy || $('#correction-note').readOnly) event.preventDefault(); });
 $('#correction-form').addEventListener('submit', async (event) => {

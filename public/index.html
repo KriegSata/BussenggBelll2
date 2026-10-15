@@ -30,8 +30,7 @@
     </nav>
     <div id="startup-error" class="card hidden" role="alert"><p>Could not load this station. Check the connection and try again.</p><button id="retry-start" class="primary">Retry loading</button></div>
     <div id="workspace-content" hidden>
-      <div class="workspace-heading"><div><p class="eyebrow" id="station-label">OPEN STATION</p><h2 id="task-title">Request stock</h2></div><div><button id="refresh-stock" class="text-button">Refresh stock</button><button id="install-button" class="secondary hidden">Install app</button></div></div>
-      <p class="station-note">Open access · Entries are recorded against this station, without verified staff identity.</p>
+      <div class="workspace-heading"><div><h2 id="task-title">Request stock</h2></div><div><button id="refresh-stock" class="text-button">Refresh stock</button><button id="install-button" class="secondary hidden">Install app</button></div></div>
       <section class="view" data-panel="request">
         <form id="request-form" class="card entry-form">
           <label>Dish / stock item<select id="request-item" class="item-select" required></select></label>
@@ -47,8 +46,10 @@
       <section class="view" data-panel="delivery">
         <form id="delivery-form" class="card entry-form">
           <label>Supplier<input id="supplier-name" required placeholder="Supplier name" list="suppliers"></label><datalist id="suppliers"></datalist>
-          <p class="muted">Enter accepted kilos only. Leave undelivered items blank.</p>
+          <p class="muted">Choose a food from the list or type its name. New foods are added to stock when saved.</p>
+          <datalist id="food-options"></datalist>
           <div id="delivery-items"></div>
+          <button type="button" id="add-delivery-item" class="secondary">+ Add food</button>
           <details><summary>Add proof note (optional)</summary><label>Receipt / proof note<input id="delivery-photo" placeholder="Receipt reference or note"></label></details>
           <p class="entry-summary" aria-live="polite"></p><p class="form-error hidden" role="alert"></p>
           <div class="form-actions"><button type="button" class="secondary clear-draft">Clear entry</button><button class="primary" type="submit">Save delivery</button></div>

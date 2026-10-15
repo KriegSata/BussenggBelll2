@@ -76,13 +76,9 @@ h3 {
   color:var(--teal-dark);
   margin-bottom:5px
 }
-.muted,.station-note {
+.muted {
   color:var(--muted);
   line-height:1.5
-}
-.station-note {
-  font-size:.8rem;
-  margin:8px 0 22px
 }
 .topbar {
   display:flex;
@@ -299,14 +295,15 @@ legend {
 }
 .delivery-row {
   display:grid;
-  grid-template-columns:1fr 170px;
-  align-items:center;
+  grid-template-columns:minmax(0,1fr) 130px auto;
+  align-items:end;
   gap:16px;
   padding:12px 0;
   border-bottom:1px solid var(--line)
 }
 .delivery-row label {
-  margin:0
+  margin:0;
+  min-width:0
 }
 .delivery-row small {
   display:block;
@@ -486,7 +483,12 @@ dialog p {
     grid-template-columns:1fr 1fr
   }
   .delivery-row {
-    grid-template-columns:1fr 120px
+    grid-template-columns:minmax(0,1fr) 100px;
+    gap:10px
+  }
+  .remove-delivery-item {
+    grid-column:1 / -1;
+    justify-self:end
   }
   .form-actions {
     gap:8px
@@ -505,9 +507,6 @@ dialog p {
   .card {
     padding:18px
   }
-  .station-note {
-    font-size:.75rem
-  }
 }
 @media(prefers-reduced-motion:no-preference) {
   button {
@@ -515,7 +514,7 @@ dialog p {
   }
 }
 @media print {
-  .topbar,.tabs,.workspace-heading,.station-note,.feedback,.section-heading button,.actions,.skip-link,dialog {
+  .topbar,.tabs,.workspace-heading,.feedback,.section-heading button,.actions,.skip-link,dialog {
     display:none!important
   }
   .view {

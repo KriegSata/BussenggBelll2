@@ -490,15 +490,33 @@ async function route(req, res) {
       const user = requireUser(req, res, ["ACCOUNTANT", "MANAGER", "OWNER"]);
       if (!user) return;
       const body = req.parsedBody;
-      const items = safeItems(body.items).map((item) => ({
-        ...item,
-        acceptedKilos: Math.max(0, Number(body.items.find((entry) => Number(entry.stockItemId) === item.stockItemId)?.acceptedKilos ?? item.kilos)),
-        rejectedKilos: Math.max(0, Number(body.items.find((entry) => Number(entry.stockItemId) === item.stockItemId)?.rejectedKilos ?? 0))
+      if (!Array.isArray(body.items) || !body.items.length) return json(res, 400, { error: "At least one food item is required." });
+      const entries = body.items.map((entry) => ({
+        stockItemId: Number(entry.stockItemId),
+        name: typeof entry.name === "string" ? entry.name.trim().replace(/\s+/g, " ") : "",
+        kilos: Number(entry.kilos),
+        acceptedKilos: Number(entry.acceptedKilos ?? entry.kilos),
+        rejectedKilos: Number(entry.rejectedKilos ?? 0)
       }));
-      if (!items.every((item) => Number.isFinite(item.acceptedKilos) && Number.isFinite(item.rejectedKilos) && item.acceptedKilos + item.rejectedKilos <= item.kilos)) return json(res, 400, { error: "Valid accepted and rejected kilos are required; totals cannot exceed ordered kilos." });
+      if (!entries.every((item) => (Number.isInteger(item.stockItemId) && item.stockItemId > 0 || item.name.length > 0 && item.name.length <= 100) && [item.kilos, item.acceptedKilos, item.rejectedKilos].every(Number.isFinite) && item.kilos > 0 && item.acceptedKilos >= 0 && item.rejectedKilos >= 0 && item.acceptedKilos + item.rejectedKilos <= item.kilos)) return json(res, 400, { error: "A valid food and positive ordered kilos are required; accepted and rejected totals cannot exceed ordered kilos." });
       const reference = nextReference("DR");
       db.exec(res.submission ? "SAVEPOINT operation" : "BEGIN IMMEDIATE");
       try {
+        const seen = new Set();
+        const items = entries.map((entry) => {
+          let stock = entry.stockItemId > 0
+            ? db.prepare("SELECT id, name FROM stock_items WHERE id = ?").get(entry.stockItemId)
+            : db.prepare("SELECT id, name FROM stock_items WHERE name = ? COLLATE NOCASE").get(entry.name);
+          if (!stock && entry.stockItemId > 0) throw new Error("A valid stock item is required. Refresh the food list.");
+          if (!stock) {
+            const added = db.prepare("INSERT INTO stock_items (name, category) VALUES (?, 'Other')").run(entry.name);
+            stock = { id: Number(added.lastInsertRowid), name: entry.name };
+            audit(user, "FOOD_ADDED", "stock_item", stock.id, { name: stock.name });
+          }
+          if (seen.has(stock.id)) throw new Error("A valid delivery must list each food once. Combine duplicate rows.");
+          seen.add(stock.id);
+          return { ...entry, stockItemId: stock.id, name: stock.name };
+        });
         const delivery = db.prepare(`
           INSERT INTO deliveries (reference, supplier_name, status, eta, receipt_photo, notes, received_by, created_at)
           VALUES (?, ?, 'RECEIVED', ?, ?, ?, ?, ?)
@@ -523,7 +541,7 @@ async function route(req, res) {
           deviceId: body.deviceId,
           sourceReference: reference,
           action: "DELIVERY_RECEIVED",
-          items: items.map((item) => ({ stockItemId: item.stockItemId, orderedKilos: item.kilos, acceptedKilos: item.acceptedKilos, rejectedKilos: item.rejectedKilos })),
+          items: items.map((item) => ({ stockItemId: item.stockItemId, name: item.name, orderedKilos: item.kilos, acceptedKilos: item.acceptedKilos, rejectedKilos: item.rejectedKilos })),
           kilos: items.reduce((sum, item) => sum + item.acceptedKilos, 0),
           condition: items.some((item) => item.rejectedKilos > 0) ? "PARTIAL / REJECTED" : "ACCEPTED",
           photoPath: body.photoPath || null
