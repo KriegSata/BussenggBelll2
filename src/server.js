@@ -448,7 +448,7 @@ async function route(req, res) {
         ORDER BY b.service_date, b.id DESC LIMIT 100
       `).all() });
     }
-    const requestApproval = pathname.match(/^\/api\/requests\/(\d+)\/(approve|return|cancel|reserve)$/);
+    const requestApproval = pathname.match(/^\/api\/requests\/(\d+)\/(approve|return|cancel|reserve|received)$/);
     if (req.method === "POST" && requestApproval) {
       const user = requireUser(req, res, ["MANAGER", "OWNER", "ACCOUNTANT", "KITCHEN"]);
       if (!user) return;
@@ -456,6 +456,13 @@ async function route(req, res) {
       const action = requestApproval[2];
       const request = db.prepare("SELECT * FROM requests WHERE id = ?").get(requestId);
       if (!request) return json(res, 404, { error: "Request not found." });
+      if (action === "received") {
+        if (request.requested_by !== user.id) return json(res, 403, { error: "Only the person who requested this product can mark it received." });
+        if (request.status !== "PENDING_FULFILLMENT") return json(res, 409, { error: "Only fulfilled requests can be marked received." });
+        db.prepare("UPDATE requests SET status = 'RECEIVED', received_by = ?, received_at = ? WHERE id = ?").run(user.id, now(), requestId);
+        audit(user, "REQUEST_RECEIVED", "request", requestId, { reference: request.reference });
+        return json(res, 200, { request: db.prepare("SELECT * FROM requests WHERE id = ?").get(requestId) });
+      }
       if (user.role === "KITCHEN" && (action !== "cancel" || request.requested_by !== user.id)) return json(res, 403, { error: "Kitchen can only cancel its own draft requests." });
       if (["cancel", "return", "approve"].includes(action) && request.status !== "DRAFT") return json(res, 409, { error: "This request has progressed. Refresh to see its current status." });
       if (action === "reserve" && request.status !== "APPROVED") return json(res, 409, { error: "Only approved requests can be reserved once." });

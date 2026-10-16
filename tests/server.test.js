@@ -194,6 +194,19 @@ test("kitchen can cancel its own draft but cannot cancel approved requests", asy
   assert.equal((await request(`/api/requests/${progressed.body.request.id}/reserve`, { method: 'POST' })).response.status, 409);
 });
 
+test("requester can mark a fulfilled request received", async () => {
+  const headers = { 'x-user-id': 'kitchen-1' };
+  const created = await request('/api/requests', { method: 'POST', headers, body: JSON.stringify({ items: [{ stockItemId: 1, kilos: 1 }] }) });
+  const requestId = created.body.request.id;
+  await request(`/api/requests/${requestId}/approve`, { method: 'POST', headers: { 'x-user-id': 'manager-1' } });
+  await request(`/api/requests/${requestId}/reserve`, { method: 'POST', headers: { 'x-user-id': 'manager-1' } });
+  const received = await request(`/api/requests/${requestId}/received`, { method: 'POST', headers });
+  assert.equal(received.response.status, 200);
+  assert.equal(received.body.request.status, 'RECEIVED');
+  assert.equal(received.body.request.received_by, 'kitchen-1');
+  assert.equal((await request(`/api/requests/${requestId}/received`, { method: 'POST', headers: { 'x-user-id': 'manager-1' } })).response.status, 403);
+});
+
 test("a manually recorded receipt cannot manufacture an inventory reversal", async () => {
   const before = (await request('/api/inventory')).body.items;
   const manual = await request('/api/custody', { method: 'POST', body: JSON.stringify({ sourceType: 'BATCH', sourceReference: 'MANUAL-BATCH', action: 'RAW_RELEASED_TO_COOK', kilos: 100, items: [{ stockItemId: 1, rawKilos: 100, freezerKilos: 0 }] }) });

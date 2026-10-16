@@ -56,7 +56,9 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'DRAFT',
     notes TEXT,
     created_at TEXT NOT NULL,
-    approved_at TEXT
+    approved_at TEXT,
+    received_by TEXT REFERENCES users(id),
+    received_at TEXT
   );
   CREATE TABLE IF NOT EXISTS request_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -201,6 +203,15 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 `);
+
+for (const statement of [
+  "ALTER TABLE requests ADD COLUMN received_by TEXT REFERENCES users(id)",
+  "ALTER TABLE requests ADD COLUMN received_at TEXT"
+]) {
+  try { db.exec(statement); } catch (error) {
+    if (!error.message.includes("duplicate column name")) throw error;
+  }
+}
 
 function now() {
   return new Date().toISOString();

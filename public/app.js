@@ -241,15 +241,21 @@ async function undoEntry(action, button) {
 }
 async function loadRequests() {
   const { requests } = await api('/api/requests');
-  $('#requests').innerHTML = requests.length ? `<table><thead><tr><th>Request</th><th>Service / kg</th><th>Status</th><th>Action</th></tr></thead><tbody>${requests.map((request) => {
+  $('#requests').innerHTML = requests.length ? `<table><thead><tr><th>Request</th><th>Requested by</th><th>Service / kg</th><th>Status</th><th>Action</th></tr></thead><tbody>${requests.map((request) => {
     const actions = [];
     if (request.status === 'DRAFT' && ['MANAGER', 'OWNER'].includes(state.user.role)) actions.push(`<button class="secondary" data-request="${request.id}" data-action="approve">Approve</button>`);
     if (request.status === 'APPROVED' && ['MANAGER', 'OWNER', 'ACCOUNTANT'].includes(state.user.role)) actions.push(`<button class="secondary" data-request="${request.id}" data-action="reserve">Reserve stock</button>`);
+    if (request.requested_by === state.user.id) {
+      const ready = request.status === 'PENDING_FULFILLMENT';
+      const explanation = request.status === 'DRAFT' ? 'Awaiting approval' : request.status === 'APPROVED' ? 'Awaiting stock reservation' : '';
+      actions.push(`<button class="secondary" data-request="${request.id}" data-action="received" ${ready ? '' : 'disabled'} title="${escapeHTML(explanation)}">Mark received</button>`);
+    }
     if (request.status === 'DRAFT' && (request.requested_by === state.user.id || ['MANAGER', 'OWNER', 'ACCOUNTANT'].includes(state.user.role))) actions.push(`<button class="text-button" data-request="${request.id}" data-action="cancel">Cancel request</button>`);
-    return `<tr><td>${escapeHTML(request.reference)}</td><td>${escapeHTML(request.service)} · ${kg(request.kilos)}</td><td>${escapeHTML(request.status.replaceAll('_', ' '))}</td><td>${actions.join(' ')}</td></tr>`;
+    return `<tr><td>${escapeHTML(request.reference)}</td><td>${escapeHTML(request.requested_by_name)}</td><td>${escapeHTML(request.service)} · ${kg(request.kilos)}</td><td>${escapeHTML(request.status.replaceAll('_', ' '))}</td><td>${actions.join(' ')}</td></tr>`;
   }).join('')}</tbody></table>` : '<p class="muted">No requests yet.</p>';
   $$('[data-request]').forEach((button) => button.addEventListener('click', async () => {
     if (state.busy) return;
+    if (button.disabled) return;
     state.busy = true;
     button.disabled = true;
     $('#station-select').disabled = true;
@@ -257,7 +263,8 @@ async function loadRequests() {
       if (button.dataset.action === 'cancel' && !await confirmAction('Cancel this draft request?', 'Cancel request')) return;
       button.dataset.key ||= id();
       await postAction(`/api/requests/${button.dataset.request}/${button.dataset.action}`, button.dataset.key);
-      feedback(`Request ${button.dataset.action === 'cancel' ? 'cancelled' : button.dataset.action === 'approve' ? 'approved' : 'stock reserved'}.`);
+      const messages = { cancel: 'cancelled', approve: 'approved', reserve: 'stock reserved', received: 'marked received' };
+      feedback(`Request ${messages[button.dataset.action] || button.dataset.action}.`);
       await loadRequests(); await refreshStock();
     } catch (error) { feedback(error.message, true); }
     finally { button.disabled = false; state.busy = false; $('#station-select').disabled = false; }
