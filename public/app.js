@@ -318,6 +318,7 @@ function useStation(user, initial = false) {
   $('#station-select').value = user.id;
   const hasOversightTab = oversightRoles.includes(user.role);
   const allowed = [...tasks[user.role], 'activity', 'overview', ...(hasOversightTab ? ['override'] : [])];
+  document.querySelector('.tabs').classList.toggle('owner-nav', user.role === 'OWNER');
   $$('nav.tabs > [data-task]').forEach((button) => {
     button.hidden = button.dataset.task === 'override' ? !hasOversightTab : hasOversightTab && oversightTasks.includes(button.dataset.task) ? true : !allowed.includes(button.dataset.task);
   });
@@ -329,7 +330,7 @@ function useStation(user, initial = false) {
   const lastUndo = store.get(`last-undo:${user.id}`);
   if (lastUndo) feedback('Your last saved entry can be undone or reviewed in Recent activity.', false, lastUndo);
   const last = store.get(`task:${user.id}`);
-  const startingTask = hasOversightTab ? 'override' : (allowed.includes(last) ? last : tasks[user.role][0]);
+  const startingTask = user.role === 'OWNER' ? 'overview' : hasOversightTab ? 'override' : (allowed.includes(last) ? last : tasks[user.role][0]);
   setTask(startingTask, !initial);
 }
 async function start() {

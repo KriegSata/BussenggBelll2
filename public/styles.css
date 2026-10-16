@@ -148,6 +148,12 @@ h3 {
   background:var(--teal-dark);
   color:white
 }
+.owner-nav [data-task="overview"] {
+  order:-2
+}
+.owner-nav [data-task="override"] {
+  order:-1
+}
 .override-picker {
   max-width:720px
 }
