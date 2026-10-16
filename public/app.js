@@ -318,7 +318,7 @@ function useStation(user, initial = false) {
   $('#station-select').value = user.id;
   const hasOversightTab = oversightRoles.includes(user.role);
   const allowed = [...tasks[user.role], 'activity', 'overview', ...(hasOversightTab ? ['override'] : [])];
-  document.querySelector('.tabs').classList.toggle('owner-nav', user.role === 'OWNER');
+  document.querySelector('.tabs').classList.toggle('owner-nav', ['OWNER', 'MANAGER'].includes(user.role));
   $$('nav.tabs > [data-task]').forEach((button) => {
     button.hidden = button.dataset.task === 'override' ? !hasOversightTab : hasOversightTab && oversightTasks.includes(button.dataset.task) ? true : !allowed.includes(button.dataset.task);
   });
