@@ -152,7 +152,7 @@ h3 {
   order:-2
 }
 .owner-nav [data-task="override"] {
-  order:-1
+  order:10
 }
 .override-picker {
   max-width:720px
