@@ -1,8 +1,10 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = { user: null, bootstrap: null, task: null, undo: null, busy: false, correction: null };
-const titles = { request: 'Request stock', delivery: 'Receive delivery', batch: 'Log cooking', service: 'Log service', activity: 'Recent activity', overview: 'Overview' };
+const titles = { request: 'Request stock', delivery: 'Receive delivery', batch: 'Log cooking', service: 'Log service', activity: 'Recent activity', overview: 'Overview', override: 'Overide' };
 const tasks = { KITCHEN: ['request', 'batch', 'service'], WAITER: ['service'], ACCOUNTANT: ['delivery', 'request'], MANAGER: ['request', 'delivery', 'batch', 'service'], OWNER: ['request', 'delivery', 'batch', 'service'] };
+const oversightRoles = ['MANAGER', 'OWNER'];
+const oversightTasks = tasks.MANAGER;
 const forms = { request: 'request-form', delivery: 'delivery-form', batch: 'batch-form', service: 'service-form' };
 const store = {
   memory: new Map(),
@@ -111,9 +113,15 @@ async function setTask(task, focus = true) {
   if (state.busy) return;
   state.task = task;
   store.set(`task:${state.user.id}`, task);
-  $$('[data-task]').forEach((button) => { if (button.dataset.task === task) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); });
+  const inOversight = task === 'override' || oversightTasks.includes(task);
+  $$('[data-task]').forEach((button) => {
+    const active = button.dataset.task === task || (button.dataset.task === 'override' && inOversight);
+    if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+  });
   $$('[data-panel]').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === task));
   $('#task-title').textContent = titles[task];
+  if (task === 'override') $('#override-task').value = '';
+  $('#return-to-override').classList.toggle('hidden', !oversightRoles.includes(state.user.role) || !oversightTasks.includes(task));
   if (forms[task] && focus) $('select, input:not([type=radio])', document.getElementById(forms[task])).focus();
   try {
     if (task === 'activity') await loadActivity();
@@ -290,8 +298,11 @@ function useStation(user, initial = false) {
   state.user = user;
   store.set('station', user.id);
   $('#station-select').value = user.id;
-  const allowed = [...tasks[user.role], 'activity', 'overview'];
-  $$('[data-task]').forEach((button) => { button.hidden = !allowed.includes(button.dataset.task); });
+  const hasOversightTab = oversightRoles.includes(user.role);
+  const allowed = [...tasks[user.role], 'activity', 'overview', ...(hasOversightTab ? ['override'] : [])];
+  $$('nav.tabs > [data-task]').forEach((button) => {
+    button.hidden = button.dataset.task === 'override' ? !hasOversightTab : hasOversightTab && oversightTasks.includes(button.dataset.task) ? true : !allowed.includes(button.dataset.task);
+  });
   $('[data-task="request"]').textContent = user.role === 'ACCOUNTANT' ? 'Requests' : 'Request stock';
   $('#request-form').hidden = user.role === 'ACCOUNTANT';
   $('#requests').parentElement.open = ['ACCOUNTANT', 'MANAGER', 'OWNER'].includes(user.role);
@@ -300,7 +311,8 @@ function useStation(user, initial = false) {
   const lastUndo = store.get(`last-undo:${user.id}`);
   if (lastUndo) feedback('Your last saved entry can be undone or reviewed in Recent activity.', false, lastUndo);
   const last = store.get(`task:${user.id}`);
-  setTask(allowed.includes(last) ? last : tasks[user.role][0], !initial);
+  const startingTask = hasOversightTab ? 'override' : (allowed.includes(last) ? last : tasks[user.role][0]);
+  setTask(startingTask, !initial);
 }
 async function start() {
   $('#retry-start').disabled = true;
@@ -333,7 +345,12 @@ for (const [task, formId] of Object.entries(forms)) {
     store.set(key('draft', task), null); restoreForm(task); $('select, input', form)?.focus();
   });
 }
-$$('[data-task]').forEach((button) => button.addEventListener('click', () => setTask(button.dataset.task)));
+$$('[data-task]').forEach((button) => button.addEventListener('click', () => {
+  if (button.dataset.task === 'override') return setTask('override');
+  setTask(button.dataset.task);
+}));
+$('#override-task').addEventListener('change', (event) => setTask(event.target.value));
+$('#return-to-override').addEventListener('click', () => setTask('override'));
 $('#station-select').addEventListener('change', (event) => useStation(state.bootstrap.users.find((user) => user.id === event.target.value)));
 $('#current-service').addEventListener('change', () => { store.set('service', $('#current-service').value); Object.keys(forms).forEach(updateSummary); });
 $('#undo-button').addEventListener('click', () => state.undo && undoEntry(state.undo, $('#undo-button')));

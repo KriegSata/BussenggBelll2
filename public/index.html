@@ -25,12 +25,28 @@
       <button data-task="delivery">Receive delivery</button>
       <button data-task="batch">Log cooking</button>
       <button data-task="service">Log service</button>
+      <button data-task="override" hidden>Overide</button>
       <button data-task="activity">Recent activity</button>
       <button data-task="overview">Overview</button>
     </nav>
     <div id="startup-error" class="card hidden" role="alert"><p>Could not load this station. Check the connection and try again.</p><button id="retry-start" class="primary">Retry loading</button></div>
     <div id="workspace-content" hidden>
-      <div class="workspace-heading"><div><h2 id="task-title">Request stock</h2></div><div><button id="refresh-stock" class="text-button">Refresh stock</button><button id="install-button" class="secondary hidden">Install app</button></div></div>
+      <div class="workspace-heading"><div><h2 id="task-title">Request stock</h2></div><div><button id="return-to-override" class="secondary hidden">Return to Overide choices</button><button id="refresh-stock" class="text-button">Refresh stock</button><button id="install-button" class="secondary hidden">Install app</button></div></div>
+      <section class="view" data-panel="override">
+        <div class="card override-picker">
+          <h2>What do you want to override?</h2>
+          <p class="muted">Choose an operational area to supervise or update.</p>
+          <label>Override area
+            <select id="override-task">
+              <option value="" selected disabled>Choose an area</option>
+              <option value="request">Request stock</option>
+              <option value="delivery">Receive delivery</option>
+              <option value="batch">Log cooking</option>
+              <option value="service">Log service</option>
+            </select>
+          </label>
+        </div>
+      </section>
       <section class="view" data-panel="request">
         <form id="request-form" class="card entry-form">
           <label>Dish / stock item<select id="request-item" class="item-select" required></select></label>

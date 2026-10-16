@@ -148,6 +148,12 @@ h3 {
   background:var(--teal-dark);
   color:white
 }
+.override-picker {
+  max-width:720px
+}
+.override-picker h2 {
+  margin-top:0
+}
 .workspace-heading,.section-heading,.form-actions {
   display:flex;
   align-items:center;
