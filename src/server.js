@@ -373,6 +373,20 @@ async function route(req, res) {
         ORDER BY p.id DESC LIMIT 100
       `).all() });
     }
+    if (req.method === "GET" && pathname === "/api/payments") {
+      const user = requireUser(req, res, ["ACCOUNTANT", "MANAGER", "OWNER"]);
+      if (!user) return;
+      return json(res, 200, { payments: db.prepare(`
+        SELECT p.*, pr.reference AS purchase_reference, u.name AS prepared_by_name,
+          a.name AS approved_by_name, r.name AS released_by_name
+        FROM payments p
+        JOIN purchase_requests pr ON pr.id = p.purchase_request_id
+        JOIN users u ON u.id = p.prepared_by
+        LEFT JOIN users a ON a.id = p.approved_by
+        LEFT JOIN users r ON r.id = p.released_by
+        ORDER BY p.id DESC LIMIT 100
+      `).all() });
+    }
     const purchaseAction = pathname.match(/^\/api\/purchases\/(\d+)\/(approve|hold)$/);
     if (req.method === "POST" && purchaseAction) {
       const user = requireUser(req, res, ["MANAGER", "OWNER"]);

@@ -28,6 +28,7 @@
       <button data-task="override" hidden>Overide</button>
       <button data-task="activity">Recent activity</button>
       <button data-task="overview">Overview</button>
+      <button data-task="payments" hidden>Payments</button>
     </nav>
     <div id="startup-error" class="card hidden" role="alert"><p>Could not load this station. Check the connection and try again.</p><button id="retry-start" class="primary">Retry loading</button></div>
     <div id="workspace-content" hidden>
@@ -46,6 +47,28 @@
             </select>
           </label>
         </div>
+      </section>
+      <section class="view" data-panel="payments">
+        <form id="payment-form" class="card entry-form">
+          <h3>Record payment</h3>
+          <label>Approved purchase
+            <select id="payment-purchase" required></select>
+          </label>
+          <div class="form-grid">
+            <label>Amount<input id="payment-amount" type="number" min="0" step="0.01" required placeholder="Enter amount"></label>
+            <label>Payment method
+              <select id="payment-method" required>
+                <option value="CASH">Cash</option>
+                <option value="BANK">Bank</option>
+                <option value="GCASH">GCash</option>
+              </select>
+            </label>
+          </div>
+          <label>Proof reference<input id="payment-proof" placeholder="Receipt or proof reference"></label>
+          <p class="form-error hidden" id="payment-error" role="alert"></p>
+          <div class="form-actions"><button class="primary" type="submit">Record payment</button></div>
+        </form>
+        <div class="card table-card"><h3>Payments</h3><div id="payments"></div></div>
       </section>
       <section class="view" data-panel="request">
         <form id="request-form" class="card entry-form">

@@ -1,8 +1,8 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = { user: null, bootstrap: null, task: null, undo: null, busy: false, correction: null, activityReceipts: [] };
-const titles = { request: 'Request stock', delivery: 'Receive delivery', batch: 'Log cooking', service: 'Log service', activity: 'Recent activity', overview: 'Overview', override: 'Overide' };
-const tasks = { KITCHEN: ['request', 'batch', 'service'], WAITER: ['service'], ACCOUNTANT: ['delivery', 'request'], MANAGER: ['request', 'delivery', 'batch', 'service'], OWNER: ['request', 'delivery', 'batch', 'service'] };
+const titles = { request: 'Request stock', delivery: 'Receive delivery', batch: 'Log cooking', service: 'Log service', activity: 'Recent activity', overview: 'Overview', override: 'Overide', payments: 'Payments' };
+const tasks = { KITCHEN: ['request', 'batch', 'service'], WAITER: ['service'], ACCOUNTANT: ['delivery', 'request', 'payments'], MANAGER: ['request', 'delivery', 'batch', 'service'], OWNER: ['request', 'delivery', 'batch', 'service'] };
 const oversightRoles = ['MANAGER', 'OWNER'];
 const oversightTasks = tasks.MANAGER;
 const forms = { request: 'request-form', delivery: 'delivery-form', batch: 'batch-form', service: 'service-form' };
@@ -127,6 +127,7 @@ async function setTask(task, focus = true) {
     if (task === 'activity') await loadActivity();
     if (task === 'request') await loadRequests();
     if (task === 'overview') await loadOverview();
+    if (task === 'payments') await loadPayments();
   } catch (error) { feedback(`Could not refresh ${titles[task].toLowerCase()}. ${error.message}`, true); }
 }
 function confirmAction(message, label = 'Confirm') {
@@ -270,6 +271,56 @@ async function loadRequests() {
     finally { button.disabled = false; state.busy = false; $('#station-select').disabled = false; }
   }));
 }
+async function loadPayments() {
+  const [{ payments }, { purchases }] = await Promise.all([api('/api/payments'), api('/api/purchases')]);
+  const approvedPurchases = purchases.filter((purchase) => purchase.status === 'APPROVED');
+  $('#payment-purchase').innerHTML = '<option value="" disabled selected>Choose an approved purchase</option>' +
+    approvedPurchases.map((purchase) => `<option value="${purchase.id}">${escapeHTML(purchase.reference)} · ${Number(purchase.total_estimate || 0).toFixed(2)}</option>`).join('');
+  $('#payments').innerHTML = payments.length ? `<table><thead><tr><th>Payment</th><th>Purchase</th><th>Amount</th><th>Method</th><th>Status</th><th>Action</th></tr></thead><tbody>${payments.map((payment) => {
+    const action = payment.status === 'APPROVED' ? `<button class="secondary" data-payment="${payment.id}" data-action="release">Release money</button>` : '';
+    return `<tr><td>${escapeHTML(payment.reference)}</td><td>${escapeHTML(payment.purchase_reference)}</td><td>${Number(payment.amount).toFixed(2)}</td><td>${escapeHTML(payment.method)}</td><td>${escapeHTML(payment.status.replaceAll('_', ' '))}</td><td>${action}</td></tr>`;
+  }).join('')}</tbody></table>` : '<p class="muted">No payments recorded yet.</p>';
+  $$('[data-payment]').forEach((button) => button.addEventListener('click', async () => {
+    if (state.busy) return;
+    state.busy = true;
+    button.disabled = true;
+    try {
+      await postAction(`/api/payments/${button.dataset.payment}/${button.dataset.action}`, button.dataset.key ||= id());
+      feedback('Payment released.');
+      await loadPayments();
+    } catch (error) { feedback(error.message, true); }
+    finally { state.busy = false; }
+  }));
+}
+$('#payment-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (state.busy) return;
+  const error = $('#payment-error');
+  error.classList.add('hidden');
+  state.busy = true;
+  const button = $('button[type="submit"]', event.target);
+  button.disabled = true;
+  try {
+    await api('/api/payments', {
+      method: 'POST',
+      body: JSON.stringify({
+        purchaseRequestId: Number($('#payment-purchase').value),
+        amount: Number($('#payment-amount').value),
+        method: $('#payment-method').value,
+        proofPhoto: $('#payment-proof').value.trim()
+      })
+    });
+    event.target.reset();
+    feedback('Payment recorded and sent for approval.');
+    await loadPayments();
+  } catch (apiError) {
+    error.textContent = apiError.message;
+    error.classList.remove('hidden');
+  } finally {
+    state.busy = false;
+    button.disabled = false;
+  }
+});
 function renderActivity() {
   const from = $('#activity-from').value ? new Date($('#activity-from').value).getTime() : -Infinity;
   const to = $('#activity-to').value ? new Date($('#activity-to').value).getTime() : Infinity;
