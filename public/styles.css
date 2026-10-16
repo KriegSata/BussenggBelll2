@@ -375,6 +375,16 @@ legend {
 .table-card {
   overflow-x:auto
 }
+.activity-filter {
+  max-width:720px
+}
+.activity-filter h3 {
+  margin-top:0
+}
+.activity-filter .form-actions {
+  justify-content:flex-start;
+  margin-top:16px
+}
 table {
   width:100%;
   border-collapse:collapse;
@@ -520,7 +530,7 @@ dialog p {
   }
 }
 @media print {
-  .topbar,.tabs,.workspace-heading,.feedback,.section-heading button,.actions,.skip-link,dialog {
+  .topbar,.tabs,.workspace-heading,.feedback,.section-heading button,.activity-filter,.actions,.skip-link,dialog {
     display:none!important
   }
   .view {

@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { user: null, bootstrap: null, task: null, undo: null, busy: false, correction: null };
+const state = { user: null, bootstrap: null, task: null, undo: null, busy: false, correction: null, activityReceipts: [] };
 const titles = { request: 'Request stock', delivery: 'Receive delivery', batch: 'Log cooking', service: 'Log service', activity: 'Recent activity', overview: 'Overview', override: 'Overide' };
 const tasks = { KITCHEN: ['request', 'batch', 'service'], WAITER: ['service'], ACCOUNTANT: ['delivery', 'request'], MANAGER: ['request', 'delivery', 'batch', 'service'], OWNER: ['request', 'delivery', 'batch', 'service'] };
 const oversightRoles = ['MANAGER', 'OWNER'];
@@ -263,13 +263,19 @@ async function loadRequests() {
     finally { button.disabled = false; state.busy = false; $('#station-select').disabled = false; }
   }));
 }
-async function loadActivity() {
-  const { receipts } = await api('/api/custody');
-  const reversed = new Set(receipts.filter((receipt) => receipt.reversed).map((receipt) => receipt.id));
-  $('#activity').innerHTML = receipts.length ? receipts.map((receipt) => {
+function renderActivity() {
+  const from = $('#activity-from').value ? new Date($('#activity-from').value).getTime() : -Infinity;
+  const to = $('#activity-to').value ? new Date($('#activity-to').value).getTime() : Infinity;
+  const filtered = state.activityReceipts.filter((receipt) => {
+    const timestamp = new Date(receipt.created_at).getTime();
+    return timestamp >= from && timestamp <= to;
+  });
+  const reversed = new Set(state.activityReceipts.filter((receipt) => receipt.reversed).map((receipt) => receipt.id));
+  $('#activity-filter-status').textContent = `${filtered.length} of ${state.activityReceipts.length} receipt${state.activityReceipts.length === 1 ? '' : 's'} shown.`;
+  $('#activity').innerHTML = filtered.length ? filtered.map((receipt) => {
     const eligible = receipt.reversible && !reversed.has(receipt.id) && (receipt.actor_id === state.user.id || ['OWNER', 'MANAGER'].includes(state.user.role));
     return `<article class="receipt ${reversed.has(receipt.id) ? 'reversed' : ''}"><h3>${escapeHTML(receipt.action.replaceAll('_', ' '))} · ${kg(receipt.kilos)}${reversed.has(receipt.id) ? ' · Undone' : ''}</h3><p>${escapeHTML(receipt.source_reference)} · ${escapeHTML(receipt.station)}</p><p class="small">${escapeHTML(new Date(receipt.created_at).toLocaleString())} · ${escapeHTML(receipt.receipt_number)}${receipt.correction_of ? ` · Linked to receipt #${receipt.correction_of}` : ''}</p>${receipt.condition ? `<p>${escapeHTML(receipt.condition)}</p>` : ''}<div class="actions">${eligible ? `<button class="secondary" data-undo="${receipt.id}">Undo entry</button>` : ''}${!receipt.correction_of ? `<button class="text-button" data-correct="${receipt.id}">Add correction note</button>` : ''}</div></article>`;
-  }).join('') : '<p class="card muted">No activity yet. Saved handoffs will appear here.</p>';
+  }).join('') : `<p class="card muted">${state.activityReceipts.length ? 'No receipts match this time range.' : 'No activity yet. Saved handoffs will appear here.'}</p>`;
   $$('[data-undo]').forEach((button) => button.addEventListener('click', async () => {
     if (state.busy) return;
     if (await confirmAction('Undo this entry? Its original receipt will stay in history.', 'Undo entry')) { button.dataset.key ||= id(); await undoEntry({ path: `/api/custody/${button.dataset.undo}/undo`, key: button.dataset.key }, button); }
@@ -282,6 +288,11 @@ async function loadActivity() {
     formError($('#correction-form'), '');
     $('#correction-dialog').showModal();
   }));
+}
+async function loadActivity() {
+  const { receipts } = await api('/api/custody');
+  state.activityReceipts = receipts;
+  renderActivity();
 }
 async function loadOverview() {
   const data = await api('/api/dashboard');
@@ -355,6 +366,20 @@ $('#station-select').addEventListener('change', (event) => useStation(state.boot
 $('#current-service').addEventListener('change', () => { store.set('service', $('#current-service').value); Object.keys(forms).forEach(updateSummary); });
 $('#undo-button').addEventListener('click', () => state.undo && undoEntry(state.undo, $('#undo-button')));
 $('#print-custody').addEventListener('click', () => window.print());
+$('#activity-filter').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const from = $('#activity-from').value;
+  const to = $('#activity-to').value;
+  if (from && to && new Date(from) > new Date(to)) {
+    $('#activity-filter-status').textContent = 'The From time must be earlier than or equal to the To time.';
+    return;
+  }
+  renderActivity();
+});
+$('#clear-activity-filter').addEventListener('click', () => {
+  $('#activity-filter').reset();
+  renderActivity();
+});
 $('#refresh-alerts').addEventListener('click', () => loadOverview().catch((error) => feedback(error.message, true)));
 $('#refresh-stock').addEventListener('click', async () => {
   const button = $('#refresh-stock');
