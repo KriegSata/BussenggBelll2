@@ -330,7 +330,7 @@ function useStation(user, initial = false) {
   const lastUndo = store.get(`last-undo:${user.id}`);
   if (lastUndo) feedback('Your last saved entry can be undone or reviewed in Recent activity.', false, lastUndo);
   const last = store.get(`task:${user.id}`);
-  const startingTask = user.role === 'OWNER' ? 'overview' : hasOversightTab ? 'override' : (allowed.includes(last) ? last : tasks[user.role][0]);
+  const startingTask = ['OWNER', 'MANAGER'].includes(user.role) ? 'overview' : (allowed.includes(last) ? last : tasks[user.role][0]);
   setTask(startingTask, !initial);
 }
 async function start() {
