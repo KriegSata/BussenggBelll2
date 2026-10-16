@@ -91,11 +91,19 @@ test("purchase approval and payment release preserve maker-checker custody", asy
     body: JSON.stringify({ purchaseRequestId: purchase.body.purchase.id, amount: 1050, method: "GCASH" })
   });
   assert.equal(payment.response.status, 201);
-  const paid = await request(`/api/payments/${payment.body.payment.id}/approve`, {
+  assert.equal(payment.body.payment.status, "APPROVED");
+  const allowancePayment = await request("/api/payments", {
     method: "POST",
-    headers: { "x-user-id": "manager-1" }
+    headers: { "x-user-id": "accountant-1" },
+    body: JSON.stringify({ purchaseRequestId: purchase.body.purchase.id, amount: 52.5, method: "GCASH" })
   });
-  assert.equal(paid.response.status, 200);
+  assert.equal(allowancePayment.response.status, 201);
+  const overLimit = await request("/api/payments", {
+    method: "POST",
+    headers: { "x-user-id": "accountant-1" },
+    body: JSON.stringify({ purchaseRequestId: purchase.body.purchase.id, amount: 0.01, method: "GCASH" })
+  });
+  assert.equal(overLimit.response.status, 409);
   const released = await request(`/api/payments/${payment.body.payment.id}/release`, {
     method: "POST",
     headers: { "x-user-id": "accountant-1" }

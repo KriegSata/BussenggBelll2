@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = { user: null, bootstrap: null, task: null, undo: null, busy: false, correction: null, activityReceipts: [] };
 const titles = { request: 'Request stock', delivery: 'Receive delivery', batch: 'Log cooking', service: 'Log service', activity: 'Recent activity', overview: 'Overview', override: 'Overide', payments: 'Payments' };
-const tasks = { KITCHEN: ['request', 'batch', 'service'], WAITER: ['service'], ACCOUNTANT: ['delivery', 'request', 'payments'], MANAGER: ['request', 'delivery', 'batch', 'service'], OWNER: ['request', 'delivery', 'batch', 'service'] };
+const tasks = { KITCHEN: ['request', 'batch', 'service'], WAITER: ['service'], ACCOUNTANT: ['delivery', 'request', 'payments'], MANAGER: ['request', 'delivery', 'batch', 'service', 'payments'], OWNER: ['request', 'delivery', 'batch', 'service', 'payments'] };
 const oversightRoles = ['MANAGER', 'OWNER'];
 const oversightTasks = tasks.MANAGER;
 const forms = { request: 'request-form', delivery: 'delivery-form', batch: 'batch-form', service: 'service-form' };
@@ -274,11 +274,20 @@ async function loadRequests() {
 async function loadPayments() {
   const [{ payments }, { purchases }] = await Promise.all([api('/api/payments'), api('/api/purchases')]);
   const approvedPurchases = purchases.filter((purchase) => purchase.status === 'APPROVED');
+  $('#payment-form').hidden = state.user.role !== 'ACCOUNTANT';
   $('#payment-purchase').innerHTML = '<option value="" disabled selected>Choose an approved purchase</option>' +
-    approvedPurchases.map((purchase) => `<option value="${purchase.id}">${escapeHTML(purchase.reference)} · ${Number(purchase.total_estimate || 0).toFixed(2)}</option>`).join('');
+    approvedPurchases.map((purchase) => `<option value="${purchase.id}">${escapeHTML(purchase.reference)} · Authorized up to ${Number(purchase.authorization_limit || purchase.total_estimate || 0).toFixed(2)}</option>`).join('');
+  if (state.user.role === 'ACCOUNTANT') {
+    $('#payment-form h3').textContent = `Record payment (5% allowance included)`;
+  }
   $('#payments').innerHTML = payments.length ? `<table><thead><tr><th>Payment</th><th>Purchase</th><th>Amount</th><th>Method</th><th>Status</th><th>Action</th></tr></thead><tbody>${payments.map((payment) => {
-    const action = payment.status === 'APPROVED' ? `<button class="secondary" data-payment="${payment.id}" data-action="release">Release money</button>` : '';
-    return `<tr><td>${escapeHTML(payment.reference)}</td><td>${escapeHTML(payment.purchase_reference)}</td><td>${Number(payment.amount).toFixed(2)}</td><td>${escapeHTML(payment.method)}</td><td>${escapeHTML(payment.status.replaceAll('_', ' '))}</td><td>${action}</td></tr>`;
+    const action = payment.status === 'PENDING_APPROVAL' && ['MANAGER', 'OWNER'].includes(state.user.role)
+      ? `<button class="secondary" data-payment="${payment.id}" data-action="approve">Approve payment</button>`
+      : payment.status === 'APPROVED' && state.user.role === 'ACCOUNTANT'
+        ? `<button class="secondary" data-payment="${payment.id}" data-action="release">Release money</button>`
+        : '';
+    const remaining = Math.max(0, Number(payment.authorization_limit || 0) - Number(payment.payment_total || 0));
+    return `<tr><td>${escapeHTML(payment.reference)}</td><td>${escapeHTML(payment.purchase_reference)}</td><td>${Number(payment.amount).toFixed(2)}</td><td>${escapeHTML(payment.method)}</td><td>${escapeHTML(payment.status.replaceAll('_', ' '))}<br><small>Remaining: ${remaining.toFixed(2)}</small></td><td>${action}</td></tr>`;
   }).join('')}</tbody></table>` : '<p class="muted">No payments recorded yet.</p>';
   $$('[data-payment]').forEach((button) => button.addEventListener('click', async () => {
     if (state.busy) return;
@@ -286,7 +295,7 @@ async function loadPayments() {
     button.disabled = true;
     try {
       await postAction(`/api/payments/${button.dataset.payment}/${button.dataset.action}`, button.dataset.key ||= id());
-      feedback('Payment released.');
+      feedback(button.dataset.action === 'approve' ? 'Payment approved.' : 'Payment released.');
       await loadPayments();
     } catch (error) { feedback(error.message, true); }
     finally { state.busy = false; }

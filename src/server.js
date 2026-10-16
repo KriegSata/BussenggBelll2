@@ -7,6 +7,7 @@ const { db, now } = require("./db");
 const PORT = Number(process.env.PORT || 3000);
 const root = path.join(__dirname, "..");
 const staticRoot = fs.existsSync(path.join(root, "dist")) ? path.join(root, "dist") : path.join(root, "public");
+const PAYMENT_ALLOWANCE_RATE = 0.05;
 
 const roleNames = {
   OWNER: "Owner / SuperAdmin",
@@ -87,10 +88,12 @@ function safeItems(items) {
   return items.map((item) => {
     const stockItemId = Number(item.stockItemId);
     const kilos = Number(item.kilos);
+    const estimatedPrice = Number(item.estimatedPrice || 0);
     if (!Number.isInteger(stockItemId) || !Number.isFinite(kilos) || kilos <= 0) {
       throw new Error("Each item needs a valid stock item and positive kilos.");
     }
-    return { stockItemId, kilos };
+    if (!Number.isFinite(estimatedPrice) || estimatedPrice < 0) throw new Error("Each item needs a valid estimated price.");
+    return { stockItemId, kilos, estimatedPrice };
   });
 }
 
@@ -365,27 +368,31 @@ async function route(req, res) {
       const user = requireUser(req, res);
       if (!user) return;
       return json(res, 200, { purchases: db.prepare(`
-        SELECT p.*, u.name AS prepared_by_name, a.name AS approved_by_name, s.name AS supplier_name
+        SELECT p.*, u.name AS prepared_by_name, a.name AS approved_by_name, s.name AS supplier_name,
+          ROUND(p.total_estimate * (1 + ?), 2) AS authorization_limit,
+          ROUND(COALESCE((SELECT SUM(amount) FROM payments WHERE purchase_request_id = p.id), 0), 2) AS payment_total
         FROM purchase_requests p
         JOIN users u ON u.id = p.prepared_by
         LEFT JOIN users a ON a.id = p.approved_by
         LEFT JOIN suppliers s ON s.id = p.supplier_id
         ORDER BY p.id DESC LIMIT 100
-      `).all() });
+      `).all(PAYMENT_ALLOWANCE_RATE) });
     }
     if (req.method === "GET" && pathname === "/api/payments") {
       const user = requireUser(req, res, ["ACCOUNTANT", "MANAGER", "OWNER"]);
       if (!user) return;
       return json(res, 200, { payments: db.prepare(`
         SELECT p.*, pr.reference AS purchase_reference, u.name AS prepared_by_name,
-          a.name AS approved_by_name, r.name AS released_by_name
+          a.name AS approved_by_name, r.name AS released_by_name,
+          pr.total_estimate, ROUND(pr.total_estimate * (1 + ?), 2) AS authorization_limit,
+          ROUND((SELECT COALESCE(SUM(amount), 0) FROM payments WHERE purchase_request_id = p.purchase_request_id), 2) AS payment_total
         FROM payments p
         JOIN purchase_requests pr ON pr.id = p.purchase_request_id
         JOIN users u ON u.id = p.prepared_by
         LEFT JOIN users a ON a.id = p.approved_by
         LEFT JOIN users r ON r.id = p.released_by
         ORDER BY p.id DESC LIMIT 100
-      `).all() });
+      `).all(PAYMENT_ALLOWANCE_RATE) });
     }
     const purchaseAction = pathname.match(/^\/api\/purchases\/(\d+)\/(approve|hold)$/);
     if (req.method === "POST" && purchaseAction) {
@@ -402,19 +409,22 @@ async function route(req, res) {
       return json(res, 200, { purchase: db.prepare("SELECT * FROM purchase_requests WHERE id = ?").get(purchaseId) });
     }
     if (req.method === "POST" && pathname === "/api/payments") {
-      const user = requireUser(req, res, ["ACCOUNTANT", "MANAGER", "OWNER"]);
+      const user = requireUser(req, res, ["ACCOUNTANT"]);
       if (!user) return;
       const body = req.parsedBody;
       const purchase = db.prepare("SELECT * FROM purchase_requests WHERE id = ?").get(Number(body.purchaseRequestId));
       const amount = Number(body.amount);
       if (!purchase || !Number.isFinite(amount) || amount < 0 || !["CASH", "BANK", "GCASH"].includes(body.method)) return json(res, 400, { error: "Valid purchase, amount, and payment method are required." });
+      if (purchase.status !== "APPROVED") return json(res, 409, { error: "The purchase must be approved before a payment can be recorded." });
+      const paidTotal = db.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM payments WHERE purchase_request_id = ?").get(purchase.id).total;
+      const authorizationLimit = Number((purchase.total_estimate * (1 + PAYMENT_ALLOWANCE_RATE)).toFixed(2));
+      if (paidTotal + amount > authorizationLimit + 0.005) return json(res, 409, { error: `Payment exceeds the authorized purchase amount, including the 5% allowance of ${authorizationLimit.toFixed(2)}.` });
       const reference = nextReference("PAY");
       const result = db.prepare(`
-        INSERT INTO payments (reference, purchase_request_id, amount, method, prepared_by, proof_photo, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO payments (reference, purchase_request_id, amount, method, status, prepared_by, proof_photo, created_at)
+        VALUES (?, ?, ?, ?, 'APPROVED', ?, ?, ?)
       `).run(reference, purchase.id, amount, body.method, user.id, body.proofPhoto || null, now());
       audit(user, "PAYMENT_PREPARED", "payment", result.lastInsertRowid, { reference, amount, method: body.method });
-      createAlert("PENDING APPROVAL", `Payment ${reference} is waiting for approval.`, "MANAGER", reference, user);
       return json(res, 201, { payment: db.prepare("SELECT * FROM payments WHERE id = ?").get(result.lastInsertRowid) });
     }
     const paymentAction = pathname.match(/^\/api\/payments\/(\d+)\/(approve|release)$/);
