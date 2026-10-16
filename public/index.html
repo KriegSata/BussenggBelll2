@@ -124,7 +124,7 @@
     </div>
   </main>
   <dialog id="confirm-dialog" aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Check this entry</h2><p id="confirm-message"></p><div class="form-actions"><button value="cancel" class="secondary" autofocus>Go back</button><button value="confirm" class="primary">Confirm</button></div></form></dialog>
-  <dialog id="correction-dialog" aria-labelledby="correction-title"><form id="correction-form"><h2 id="correction-title">Add a correction note</h2><p class="muted">This adds a linked note. It does not change stock. Ask inventory staff to reconcile any quantity changes.</p><label>What needs correcting?<textarea id="correction-note" required rows="4"></textarea></label><p class="form-error hidden" role="alert"></p><div class="form-actions"><button type="button" id="cancel-correction" class="secondary">Cancel</button><button class="primary">Save note</button></div></form></dialog>
+  <dialog id="correction-dialog" aria-labelledby="correction-title"><form id="correction-form"><h2 id="correction-title">Add a correction note</h2><textarea id="correction-note" aria-label="Correction note" required rows="4"></textarea><p class="form-error hidden" role="alert"></p><div class="form-actions"><button type="button" id="cancel-correction" class="secondary">Cancel</button><button class="primary">Save note</button></div></form></dialog>
   <script src="/app.js"></script>
 </body>
 </html>
