@@ -90,6 +90,14 @@ function availableHints() {
     hint.textContent = item ? `Available raw stock: ${kg(item.onHand - item.reserved)} · Freezer: ${kg(item.freezer)}` : 'Choose a dish';
   });
 }
+function renderStockOverview() {
+  const items = state.bootstrap?.items || [];
+  $('#stock-overview-table').innerHTML = items.length ? `<table><thead><tr><th>Stock item</th><th>Category</th><th>Available raw</th><th>Reserved</th><th>Freezer</th><th>Status</th></tr></thead><tbody>${items.map((item) => {
+    const available = Number(item.onHand || 0) - Number(item.reserved || 0);
+    const low = available <= Number(item.reorderPoint || 0);
+    return `<tr class="${low ? 'stock-low' : ''}"><td><strong>${escapeHTML(item.name)}</strong></td><td>${escapeHTML(item.category || '—')}</td><td>${kg(available)}</td><td>${kg(item.reserved)}</td><td>${kg(item.freezer)}</td><td><span class="stock-status ${low ? 'stock-status-low' : 'stock-status-ok'}">${low ? 'Reorder soon' : 'Available'}</span></td></tr>`;
+  }).join('')}</tbody></table>` : '<p class="muted">No stock items found.</p>';
+}
 function updateSummary(task) {
   availableHints();
   const form = document.getElementById(forms[task]);
@@ -173,6 +181,7 @@ async function refreshStock() {
   state.bootstrap.items = items;
   populateStockOptions();
   availableHints();
+  renderStockOverview();
 }
 async function submitEntry(event, task) {
   event.preventDefault();
@@ -363,6 +372,7 @@ async function loadActivity() {
 }
 async function loadOverview() {
   const data = await api('/api/dashboard');
+  renderStockOverview();
   $('#metrics').innerHTML = [['Available stock', kg(data.onHand - data.reserved)], ['Freezer', kg(data.freezer)], ['Cooked today', kg(data.cooked)]].map(([label, value]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`).join('');
   const { alerts } = await api('/api/alerts');
   $('#alerts').innerHTML = alerts.filter((alert) => alert.status === 'OPEN').map((alert) => `<article class="alert"><h3>${escapeHTML(alert.type)}</h3><p>${escapeHTML(alert.message)}</p><button class="secondary" data-alert="${alert.id}">Acknowledge</button></article>`).join('') || '<p class="muted">All clear. No open alerts for this station.</p>';

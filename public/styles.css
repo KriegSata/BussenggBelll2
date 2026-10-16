@@ -381,6 +381,28 @@ legend {
 .table-card {
   overflow-x:auto
 }
+.stock-overview {
+  margin-bottom:18px
+}
+.stock-low td {
+  background:#fff8ed
+}
+.stock-status {
+  display:inline-block;
+  padding:4px 8px;
+  border-radius:999px;
+  font-size:.78rem;
+  font-weight:700;
+  white-space:nowrap
+}
+.stock-status-ok {
+  color:#17634d;
+  background:#e6f5ee
+}
+.stock-status-low {
+  color:#8a4b00;
+  background:#fff0d6
+}
 .activity-filter {
   max-width:720px
 }

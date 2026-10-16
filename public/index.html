@@ -140,7 +140,14 @@
         </form>
         <div id="activity" class="stack"></div>
       </section>
-      <section class="view" data-panel="overview"><div id="metrics" class="metrics"></div><article class="card"><div class="section-heading"><h3>Needs attention</h3><button id="refresh-alerts" class="secondary">Refresh</button></div><div id="alerts" class="stack"></div></article></section>
+      <section class="view" data-panel="overview">
+        <div id="metrics" class="metrics"></div>
+        <article class="card table-card stock-overview">
+          <div class="section-heading"><h3>Stock on hand</h3><span class="muted">Live inventory overview</span></div>
+          <div id="stock-overview-table"></div>
+        </article>
+        <article class="card"><div class="section-heading"><h3>Needs attention</h3><button id="refresh-alerts" class="secondary">Refresh</button></div><div id="alerts" class="stack"></div></article>
+      </section>
       <aside id="feedback" class="feedback" hidden aria-label="Last action">
         <div id="feedback-message" role="status" aria-live="polite" aria-atomic="true">Ready for your next entry.</div><button id="undo-button" class="secondary" hidden>Undo</button>
       </aside>
